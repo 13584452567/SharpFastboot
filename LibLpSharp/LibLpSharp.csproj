@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.29.3" />
+    <PackageReference Include="Google.Protobuf.Tools" Version="3.29.3" />
+  </ItemGroup>
+
+  <!-- 自动编译当前目录下的所�?.proto 文件 -->
+  <ItemGroup>
+    <Protobuf Include="**/*.proto" GrpcServices="None" />
+  </ItemGroup>
+
+</Project>
