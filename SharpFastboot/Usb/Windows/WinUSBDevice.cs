@@ -25,7 +25,7 @@ namespace SharpFastboot.Usb.Windows
         public override Exception? CreateHandle()
         {
             IntPtr hUsb = SimpleCreateHandle(DevicePath, true);
-            int bytesTransfered;
+            uint bytesTransfered;
             if (hUsb == (IntPtr)INVALID_HANDLE_VALUE)
                 return new Win32Exception(Marshal.GetLastWin32Error());
             FileHandle = hUsb;
