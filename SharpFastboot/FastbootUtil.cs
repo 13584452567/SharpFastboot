@@ -33,38 +33,61 @@ namespace SharpFastboot
             DateTime start = DateTime.Now;
             while ((DateTime.Now - start) < TimeSpan.FromSeconds(ReadTimeoutSeconds))
             {
-                byte[] data = UsbDevice.Read(256);
-                string devStatus = Encoding.UTF8.GetString(data);
-                if (devStatus.StartsWith("OKAY") || devStatus.StartsWith("FAIL"))
+                byte[] data;
+                try
                 {
-                    response.Result = devStatus.StartsWith("OKAY") ? FastbootState.Success : FastbootState.Fail;
-                    response.Response = devStatus.Substring(4);
+                    data = UsbDevice.Read(64);
+                }
+                catch (Exception)
+                {
+                    UsbDevice.Dispose();
+                    response.Result = FastbootState.Fail;
+                    response.Response = "status read failed";
                     return response;
                 }
-                if (devStatus.StartsWith("INFO"))
+
+                if (data.Length == 0) continue;
+
+                string devStatus = Encoding.UTF8.GetString(data);
+                if (devStatus.Length < 4)
                 {
-                    string info = devStatus.Substring(4);
-                    response.Info.Add(info);
-                    ReceivedFromDevice?.Invoke(this, new FastbootReceivedFromDeviceEventArgs(FastbootState.Info, info));
+                    UsbDevice.Dispose();
+                    response.Result = FastbootState.Fail;
+                    response.Response = "status malformed";
+                    return response;
+                }
+
+                string prefix = devStatus.Substring(0, 4);
+                string content = devStatus.Length > 4 ? devStatus.Substring(4) : "";
+
+                if (prefix == "OKAY" || prefix == "FAIL")
+                {
+                    response.Result = prefix == "OKAY" ? FastbootState.Success : FastbootState.Fail;
+                    response.Response = content;
+                    return response;
+                }
+                else if (prefix == "INFO")
+                {
+                    response.Info.Add(content);
+                    ReceivedFromDevice?.Invoke(this, new FastbootReceivedFromDeviceEventArgs(FastbootState.Info, content));
                     start = DateTime.Now;
                 }
-                else if (devStatus.StartsWith("TEXT"))
+                else if (prefix == "TEXT")
                 {
-                    string text = devStatus.Substring(4);
-                    response.Text += text;
-                    ReceivedFromDevice?.Invoke(this, new FastbootReceivedFromDeviceEventArgs(FastbootState.Text, null, text));
+                    response.Text += content;
+                    ReceivedFromDevice?.Invoke(this, new FastbootReceivedFromDeviceEventArgs(FastbootState.Text, null, content));
                     start = DateTime.Now;
                 }
-                else if (devStatus.StartsWith("DATA"))
+                else if (prefix == "DATA")
                 {
                     response.Result = FastbootState.Data;
-                    int size = int.Parse(devStatus.Substring(4), System.Globalization.NumberStyles.HexNumber);
-                    response.Size = size;
+                    response.Size = int.Parse(content, System.Globalization.NumberStyles.HexNumber);
                     return response;
                 }
                 else
                 {
                     response.Result = FastbootState.Unknown;
+                    response.Response = devStatus;
                     return response;
                 }
             }
@@ -77,7 +100,23 @@ namespace SharpFastboot
         /// </summary>
         public FastbootResponse RawCommand(string command)
         {
-            UsbDevice.Write(Encoding.UTF8.GetBytes(command), command.Length);
+            byte[] cmdBytes = Encoding.UTF8.GetBytes(command);
+            if (cmdBytes.Length > 64)
+                throw new Exception("Command too long (max 64 bytes)");
+
+            try
+            {
+                if (UsbDevice.Write(cmdBytes, cmdBytes.Length) != cmdBytes.Length)
+                {
+                    UsbDevice.Dispose();
+                    return new FastbootResponse { Result = FastbootState.Fail, Response = "command write failed (short transfer)" };
+                }
+            }
+            catch (Exception)
+            {
+                UsbDevice.Dispose();
+                return new FastbootResponse { Result = FastbootState.Fail, Response = "command write failed" };
+            }
             return HandleResponse();
         }
 

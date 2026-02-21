@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace SharpFastboot.Usb
 {
-    public abstract class UsbDevice
+    public abstract class UsbDevice : IDisposable
     {
         public required string DevicePath { get; set; }
         public string? SerialNumber { get; set; }
@@ -16,6 +16,7 @@ namespace SharpFastboot.Usb
         public abstract long Write(byte[] data, int length);
         public abstract Exception? GetSerialNumber();
         public abstract Exception? CreateHandle();
+        public abstract void Dispose();
     }
 
     public enum UsbDeviceType
