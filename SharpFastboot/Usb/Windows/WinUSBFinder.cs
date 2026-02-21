@@ -25,58 +25,73 @@ namespace SharpFastboot.Usb.Windows
         public static readonly uint IoGetDescriptorCode = ((FILE_DEVICE_UNKNOWN) << 16) | ((FILE_READ_ACCESS) << 14) | ((10) << 2) | (METHOD_BUFFERED);
 
         public static List<UsbDevice> FindDevice()
-          {
+        {
             List<UsbDevice> devices = new List<UsbDevice>();
             IntPtr devInfo = SetupDiGetClassDevsW(ref AndroidUsbGUID, null, 0, DIGCF_DEVICEINTERFACE);
             if (devInfo.ToInt64() == -1)
                 throw new Win32Exception(Marshal.GetLastWin32Error());
-            uint index;
-            for (index = 0; ; index++)
+            try
             {
-                SpDeviceInterfaceData interfaceData = new SpDeviceInterfaceData();
-                 interfaceData.cbSize = (uint)Marshal.SizeOf<SpDeviceInterfaceData>();
-                 if (SetupDiEnumDeviceInterfaces(devInfo, IntPtr.Zero, ref AndroidUsbGUID, index, ref interfaceData))
+                uint index;
+                for (index = 0; ; index++)
                 {
-                    uint sizeResult = GetInterfaceDetailDataRequiredSize(devInfo, interfaceData);
-                    IntPtr buffer = Marshal.AllocHGlobal((int)sizeResult);
-                    Marshal.WriteInt32(buffer, IntPtr.Size == 8 ? 8 : 6);
-                    if (!SetupDiGetDeviceInterfaceDetailW(devInfo, ref interfaceData,
-                        buffer, sizeResult, out _, IntPtr.Zero))
+                    SpDeviceInterfaceData interfaceData = new SpDeviceInterfaceData();
+                    interfaceData.cbSize = (uint)Marshal.SizeOf<SpDeviceInterfaceData>();
+                    if (SetupDiEnumDeviceInterfaces(devInfo, IntPtr.Zero, ref AndroidUsbGUID, index, ref interfaceData))
                     {
-                        Marshal.FreeHGlobal(buffer);
-                        throw new Win32Exception(Marshal.GetLastWin32Error());
-                    }
-                    else
-                    {
-                        string? devicePath = Marshal.PtrToStringAuto(buffer + 4);
-                        Marshal.FreeHGlobal(buffer);
-                        if (string.IsNullOrEmpty(devicePath))
-                            continue;
-                        bool? isLegacy = isLegacyDevice(devicePath);
-                        if (!isLegacy.HasValue)
-                            continue;
-
-                        UsbDevice usb;
-                        if (isLegacy.Value)
+                        uint sizeResult = GetInterfaceDetailDataRequiredSize(devInfo, interfaceData);
+                        IntPtr buffer = Marshal.AllocHGlobal((int)sizeResult);
+                        Marshal.WriteInt32(buffer, IntPtr.Size == 8 ? 8 : 6);
+                        if (!SetupDiGetDeviceInterfaceDetailW(devInfo, ref interfaceData,
+                            buffer, sizeResult, out _, IntPtr.Zero))
                         {
-                            usb = new LegacyUsbDevice { DevicePath = devicePath };
-                            usb.UsbDeviceType = UsbDeviceType.WinLegacy;
+                            Marshal.FreeHGlobal(buffer);
+                            throw new Win32Exception(Marshal.GetLastWin32Error());
                         }
                         else
                         {
-                            usb = new WinUSBDevice { DevicePath = devicePath };
-                            usb.UsbDeviceType = UsbDeviceType.WinUSB;
+                            string? devicePath = Marshal.PtrToStringUni(buffer + 4);
+                            Marshal.FreeHGlobal(buffer);
+                            if (string.IsNullOrEmpty(devicePath))
+                                continue;
+                            bool? isLegacy = isLegacyDevice(devicePath);
+                            if (!isLegacy.HasValue)
+                                continue;
+
+                            UsbDevice usb;
+                            if (isLegacy.Value)
+                            {
+                                usb = new LegacyUsbDevice { DevicePath = devicePath };
+                                usb.UsbDeviceType = UsbDeviceType.WinLegacy;
+                            }
+                            else
+                            {
+                                usb = new WinUSBDevice { DevicePath = devicePath };
+                                usb.UsbDeviceType = UsbDeviceType.WinUSB;
+                            }
+
+                            var err = usb.CreateHandle();
+                            if (err == null)
+                            {
+                                devices.Add(usb);
+                            }
+                            else
+                            {
+                                usb.Dispose();
+                            }
                         }
-                        if(usb.CreateHandle() == null)
-                            devices.Add(usb);
+                    }
+                    else
+                    {
+                        int error = Marshal.GetLastWin32Error();
+                        if (error == ERROR_NO_MORE_ITEMS) break;
+                        throw new Win32Exception(error);
                     }
                 }
-                else
-                 {
-                    int error = Marshal.GetLastWin32Error();
-                    if (error == ERROR_NO_MORE_ITEMS) break;
-                    throw new Win32Exception(error);
-                }
+            }
+            finally
+            {
+                SetupDiDestroyDeviceInfoList(devInfo);
             }
             return devices;
         }
@@ -98,7 +113,7 @@ namespace SharpFastboot.Usb.Windows
         private static bool? isLegacyDevice(string devicePath)
         {
             IntPtr hUsb = SimpleCreateHandle(devicePath);
-            if (hUsb == INVALID_HANDLE_VALUE)
+            if (hUsb == (IntPtr)INVALID_HANDLE_VALUE)
                 return null;
             IntPtr dataPtr = Marshal.AllocHGlobal(32);
             int bytes_get;

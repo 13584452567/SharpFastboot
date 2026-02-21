@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="Demo/Demo.csproj" />
+  <Project Path="FastbootCLI/FastbootCLI.csproj" />
+  <Project Path="LibLpSharp/LibLpSharp.csproj" />
+  <Project Path="LibSparseSharp/LibSparseSharp.csproj" />
+  <Project Path="SharpFastboot/SharpFastboot.csproj" />
+  <Project Path="SharpFastboot.Tests/SharpFastboot.Tests.csproj" />
+</Solution>

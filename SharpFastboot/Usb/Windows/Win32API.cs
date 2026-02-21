@@ -12,7 +12,7 @@ namespace SharpFastboot.Usb.Windows
     public class Win32API
     {
         //File
-        public static uint GENRIC_READ { get; } = 0x80000000;
+        public static uint GENERIC_READ { get; } = 0x80000000;
         public static uint GENERIC_WRITE { get; } = 0x40000000;
         public static uint FILE_SHARE_READ { get; } = 0x00000001;
         public static uint FILE_SHARE_WRITE { get; } = 0x00000002;
@@ -24,7 +24,7 @@ namespace SharpFastboot.Usb.Windows
         public static uint FILE_FLAG_OVERLAPPED { get; } = 0x40000000;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
-        public static extern nint CreateFileW(string fileName, uint access,
+        public static extern nint CreateFileW([MarshalAs(UnmanagedType.LPWStr)] string fileName, uint access,
                                              uint shareMode, nint securityAttributes,
                                              uint createDisposition, uint flagsAndAttributes,
                                              nint template);
@@ -38,11 +38,11 @@ namespace SharpFastboot.Usb.Windows
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         public static extern bool CloseHandle(nint handle);
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
-        public static extern bool WriteFile(nint hFile, nint buffer, int sizeToWrite, out ulong bytesWritten, nint overlapped);
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
+        public static extern bool WriteFile(nint hFile, nint buffer, uint sizeToWrite, out uint bytesWritten, nint overlapped);
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
-        public static extern bool ReadFile(nint hFile, nint buffer, int sizeToRead, out int bytesRead, nint overlapped);
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
+        public static extern bool ReadFile(nint hFile, nint buffer, uint sizeToRead, out uint bytesRead, nint overlapped);
 
         //USB
         public struct GUID
@@ -126,10 +126,13 @@ namespace SharpFastboot.Usb.Windows
                                                                    out uint requiredSize,
                                                                    nint deviceInfoData);
 
+        [DllImport("setupapi.dll", SetLastError = true)]
+        public static extern bool SetupDiDestroyDeviceInfoList(nint deviceInfoSet);
+
         public static nint SimpleCreateHandle(string filePath, bool overlapped = false)
         {
             return CreateFileW(filePath,
-                GENRIC_READ | GENERIC_WRITE,
+                GENERIC_READ | GENERIC_WRITE,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 nint.Zero, OPEN_EXISTING,
                 overlapped ? FILE_FLAG_OVERLAPPED : 0, nint.Zero);
