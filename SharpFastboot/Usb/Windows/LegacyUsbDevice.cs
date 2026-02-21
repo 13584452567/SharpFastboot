@@ -20,123 +20,73 @@ namespace SharpFastboot.Usb.Windows
 
         public IntPtr WriteBulkHandle { get; private set; }
 
-        public override Exception? CreateHandle()
+        public override int CreateHandle()
         {
             DeviceHandle = SimpleCreateHandle(DevicePath);
             ReadBulkHandle = SimpleCreateHandle(DevicePath + "\\BulkRead");
             WriteBulkHandle = SimpleCreateHandle(DevicePath + "\\BulkWrite");
-            if (DeviceHandle == (IntPtr)INVALID_HANDLE_VALUE || ReadBulkHandle == (IntPtr)INVALID_HANDLE_VALUE || WriteBulkHandle == (IntPtr)INVALID_HANDLE_VALUE)
-                return new Win32Exception(Marshal.GetLastWin32Error());
+            if (DeviceHandle == INVALID_HANDLE_VALUE ||
+                ReadBulkHandle == INVALID_HANDLE_VALUE ||
+                WriteBulkHandle == INVALID_HANDLE_VALUE)
+                return Marshal.GetLastWin32Error();
             GetSerialNumber();
-            return null;
+            return 0;
         }
 
-        public override Exception? GetSerialNumber()
+        public override int GetSerialNumber()
         {
-            IntPtr serialPtr = Marshal.AllocHGlobal(512);
+            byte[] serial = new byte[512];
             int bytes_get;
-            if(DeviceIoControl(DeviceHandle, IoGetSerialCode, IntPtr.Zero, 0, serialPtr, 512, out bytes_get, IntPtr.Zero))
+            if(DeviceIoControl(DeviceHandle, IoGetSerialCode, Array.Empty<byte>(), 0, serial, 512, out bytes_get, IntPtr.Zero))
             {
-                SerialNumber = Marshal.PtrToStringUni(serialPtr);
-                Marshal.FreeHGlobal(serialPtr);
-                return null;
+                SerialNumber = Encoding.UTF8.GetString(serial);
+                return 0;
             }
-            return new Win32Exception(Marshal.GetLastWin32Error());
+            return Marshal.GetLastWin32Error();
         }
 
         public override byte[] Read(int length)
         {
+            uint bytesRead;
+            byte[] data = new byte[length];
             if (ReadBulkHandle == IntPtr.Zero)
                 throw new Exception("Read handle is closed.");
 
-            int xfer = (length > 1024 * 1024) ? 1024 * 1024 : length;
-
-            IntPtr dataPtr = Marshal.AllocHGlobal(xfer);
-            try
+            if (ReadFile(ReadBulkHandle, data, (uint)length, out bytesRead, IntPtr.Zero))
             {
-                while (true)
-                {
-                    uint bytesRead;
-                    if (ReadFile(ReadBulkHandle, dataPtr, (uint)xfer, out bytesRead, IntPtr.Zero))
-                    {
-                        byte[] res = new byte[bytesRead];
-                        Marshal.Copy(dataPtr, res, 0, (int)bytesRead);
-                        return res;
-                    }
-                    else
-                    {
-                        var error = Marshal.GetLastWin32Error();
-                        if (error == 121) // ERROR_SEM_TIMEOUT
-                        {
-                            continue;
-                        }
-                        if (error == 6) // ERROR_INVALID_HANDLE
-                        {
-                            Dispose();
-                        }
-                        throw new Win32Exception(error);
-                    }
-                }
+                byte[] res = new byte[bytesRead];
+                Array.Copy(data, res, bytesRead);
+                return res;
             }
-            finally
-            {
-                Marshal.FreeHGlobal(dataPtr);
-            }
+            throw new Win32Exception(Marshal.GetLastWin32Error());
         }
 
         public override long Write(byte[] data, int length)
         {
+            ulong bytesWrite = 0;
             if (WriteBulkHandle == IntPtr.Zero)
                 throw new Exception("Write handle is closed.");
 
-            int totalWritten = 0;
-            const int MAX_USBFS_BULK_SIZE = 1024 * 1024;
-
-            IntPtr dataPtr = Marshal.AllocHGlobal(Math.Min(length, MAX_USBFS_BULK_SIZE));
-            try
+            if(WriteFile(WriteBulkHandle, data, (uint)length, out bytesWrite, IntPtr.Zero))
             {
-                while (totalWritten < length)
-                {
-                    int xfer = Math.Min(MAX_USBFS_BULK_SIZE, length - totalWritten);
-                    Marshal.Copy(data, totalWritten, dataPtr, xfer);
-
-                    uint bytesTransfered;
-                    if (WriteFile(WriteBulkHandle, dataPtr, (uint)xfer, out bytesTransfered, IntPtr.Zero))
-                    {
-                        if (bytesTransfered == 0) break;
-                        totalWritten += (int)bytesTransfered;
-                    }
-                    else
-                    {
-                        var error = Marshal.GetLastWin32Error();
-                        if (error == 6) // ERROR_INVALID_HANDLE
-                        {
-                            Dispose();
-                        }
-                        throw new Win32Exception(error);
-                    }
-                }
-                return totalWritten;
+                return (long)bytesWrite;
             }
-            finally
-            {
-                Marshal.FreeHGlobal(dataPtr);
-            }
+            throw new Win32Exception(Marshal.GetLastWin32Error());
         }
 
         public override void Dispose()
         {
-            if (DeviceHandle != IntPtr.Zero && DeviceHandle != (IntPtr)(-1))
+            if (DeviceHandle != IntPtr.Zero && DeviceHandle != INVALID_HANDLE_VALUE)
             {
                 CloseHandle(DeviceHandle);
                 DeviceHandle = IntPtr.Zero;
             }
-            if (ReadBulkHandle != IntPtr.Zero && ReadBulkHandle != (IntPtr)(-1))
+            if (ReadBulkHandle != IntPtr.Zero && ReadBulkHandle != INVALID_HANDLE_VALUE)
             {
                 CloseHandle(ReadBulkHandle);
                 ReadBulkHandle = IntPtr.Zero;
             }
-            if (WriteBulkHandle != IntPtr.Zero && WriteBulkHandle != (IntPtr)(-1))
+            if (WriteBulkHandle != IntPtr.Zero && WriteBulkHandle != INVALID_HANDLE_VALUE)
             {
                 CloseHandle(WriteBulkHandle);
                 WriteBulkHandle = IntPtr.Zero;

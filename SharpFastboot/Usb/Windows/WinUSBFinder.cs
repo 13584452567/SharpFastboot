@@ -69,16 +69,10 @@ namespace SharpFastboot.Usb.Windows
                                 usb = new WinUSBDevice { DevicePath = devicePath };
                                 usb.UsbDeviceType = UsbDeviceType.WinUSB;
                             }
-
-                            var err = usb.CreateHandle();
-                            if (err == null)
-                            {
+                            if (usb.CreateHandle() == 0)
                                 devices.Add(usb);
-                            }
                             else
-                            {
                                 usb.Dispose();
-                            }
                         }
                     }
                     else
@@ -112,13 +106,12 @@ namespace SharpFastboot.Usb.Windows
 
         private static bool? isLegacyDevice(string devicePath)
         {
-            IntPtr hUsb = SimpleCreateHandle(devicePath);
-            if (hUsb == (IntPtr)INVALID_HANDLE_VALUE)
-                return null;
-            IntPtr dataPtr = Marshal.AllocHGlobal(32);
+            byte[] data = new byte[32];
             int bytes_get;
-            bool ret = DeviceIoControl(hUsb, IoGetDescriptorCode, IntPtr.Zero, 0, dataPtr, 32, out bytes_get, IntPtr.Zero);
-            Marshal.FreeHGlobal(dataPtr);
+            IntPtr hUsb = SimpleCreateHandle(devicePath);
+            if (hUsb == INVALID_HANDLE_VALUE)
+                return null;
+            bool ret = DeviceIoControl(hUsb, IoGetDescriptorCode, Array.Empty<byte>(), 0, data, 32, out bytes_get, IntPtr.Zero);
             CloseHandle(hUsb);
             return ret;
         } 

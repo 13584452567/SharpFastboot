@@ -19,9 +19,10 @@ namespace SharpFastboot
         public FastbootUtil(UsbDevice usb) => UsbDevice = usb;
         public static int ReadTimeoutSeconds = 30;
         public static int OnceSendDataSize = 1024 * 1024;
+        public static int SparseMaxDownloadSize = 256 * 1024 * 1024;
 
         public event EventHandler<FastbootReceivedFromDeviceEventArgs>? ReceivedFromDevice;
-        public event EventHandler<(long, long)>? SendDataProgressChanged;
+        public event EventHandler<(long, long)>? DataTransferProgressChanged;
         public event EventHandler<string>? CurrentStepChanged;
 
         /// <summary>
@@ -36,13 +37,12 @@ namespace SharpFastboot
                 byte[] data;
                 try
                 {
-                    data = UsbDevice.Read(64);
+                    data = UsbDevice.Read(256);
                 }
-                catch (Exception)
+                catch (Exception e)
                 {
-                    UsbDevice.Dispose();
                     response.Result = FastbootState.Fail;
-                    response.Response = "status read failed";
+                    response.Response = "status read failed: " + e.Message;
                     return response;
                 }
 
@@ -51,14 +51,13 @@ namespace SharpFastboot
                 string devStatus = Encoding.UTF8.GetString(data);
                 if (devStatus.Length < 4)
                 {
-                    UsbDevice.Dispose();
                     response.Result = FastbootState.Fail;
                     response.Response = "status malformed";
                     return response;
                 }
 
                 string prefix = devStatus.Substring(0, 4);
-                string content = devStatus.Length > 4 ? devStatus.Substring(4) : "";
+                string content = devStatus.Substring(4);
 
                 if (prefix == "OKAY" || prefix == "FAIL")
                 {
@@ -81,7 +80,7 @@ namespace SharpFastboot
                 else if (prefix == "DATA")
                 {
                     response.Result = FastbootState.Data;
-                    response.Size = int.Parse(content, System.Globalization.NumberStyles.HexNumber);
+                    response.DataSize = int.Parse(content, System.Globalization.NumberStyles.HexNumber);
                     return response;
                 }
                 else
@@ -101,30 +100,24 @@ namespace SharpFastboot
         public FastbootResponse RawCommand(string command)
         {
             byte[] cmdBytes = Encoding.UTF8.GetBytes(command);
-            if (cmdBytes.Length > 64)
-                throw new Exception("Command too long (max 64 bytes)");
-
             try
             {
                 if (UsbDevice.Write(cmdBytes, cmdBytes.Length) != cmdBytes.Length)
-                {
-                    UsbDevice.Dispose();
                     return new FastbootResponse { Result = FastbootState.Fail, Response = "command write failed (short transfer)" };
-                }
             }
-            catch (Exception)
+            catch (Exception e)
             {
-                UsbDevice.Dispose();
-                return new FastbootResponse { Result = FastbootState.Fail, Response = "command write failed" };
+                return new FastbootResponse { Result = FastbootState.Fail, Response = "command write failed: " + e.Message };
             }
             return HandleResponse();
         }
 
         public FastbootResponse Reboot(string target = "system")
         {
-            if (target == "recovery") return RawCommand("reboot-recovery").ThrowIfError();
-            if (target == "bootloader") return RebootBootloader();
-            return RawCommand("reboot:" + target).ThrowIfError();
+            if (target == "recovery") return RawCommand("reboot-recovery");
+            if (target == "bootloader") return RawCommand("reboot-bootloader");
+            if (target == "fastboot") return RawCommand("reboot-fastboot");
+            return RawCommand("reboot-" + target);
         }
 
         /// <summary>
@@ -183,7 +176,7 @@ namespace SharpFastboot
                 UsbDevice.Write(buffer, readSize);
                 bytesRead += readSize;
                 if(onEvent)
-                    SendDataProgressChanged?.Invoke(this, (bytesRead, length));
+                    DataTransferProgressChanged?.Invoke(this, (bytesRead, length));
             }
             return HandleResponse();
         }
@@ -191,27 +184,25 @@ namespace SharpFastboot
         /// <summary>
         /// 从设备上传数据 (对应协议中的上传)
         /// </summary>
-        public void UploadData(string command, Stream output)
+        public FastbootResponse UploadData(string command, Stream output)
         {
             FastbootResponse response = RawCommand(command);
             if (response.Result != FastbootState.Data)
-            {
                 throw new Exception("Unexpected response for upload: " + response.Result);
-            }
 
-            int size = response.Size;
-            long bytesDownloaded = 0;
+            int size = response.DataSize;
+            int bytesDownloaded = 0;
             while (bytesDownloaded < size)
             {
-                int toRead = Math.Min(OnceSendDataSize, size - (int)bytesDownloaded);
+                int toRead = Math.Min(OnceSendDataSize, size - bytesDownloaded);
                 byte[] data = UsbDevice.Read(toRead);
                 if (data == null || data.Length == 0) throw new Exception("Unexpected EOF from USB.");
                 output.Write(data, 0, data.Length);
                 bytesDownloaded += data.Length;
-                SendDataProgressChanged?.Invoke(this, (bytesDownloaded, size));
+                DataTransferProgressChanged?.Invoke(this, (bytesDownloaded, size));
             }
 
-            HandleResponse().ThrowIfError(); // 最后应该收到一个 OKAY
+            return HandleResponse(); // 最后应该收到一个 OKAY
         }
 
         /// <summary>
@@ -221,13 +212,13 @@ namespace SharpFastboot
         {
             if (action != "cancel" && action != "merge")
                 throw new ArgumentException("SnapshotUpdate action must be 'cancel' or 'merge'");
-            return RawCommand("snapshot-update:" + action).ThrowIfError();
+            return RawCommand("snapshot-update:" + action);
         }
 
         /// <summary>
         /// 从分区回读并抓取数据 (fetch)
         /// </summary>
-        public void Fetch(string partition, string outputPath, long offset = 0, long size = -1)
+        public FastbootResponse Fetch(string partition, string outputPath, long offset = 0, long size = -1)
         {
             string cmd = "fetch:" + partition;
             if (offset > 0 || size > 0)
@@ -240,7 +231,7 @@ namespace SharpFastboot
             }
 
             using var fs = File.Create(outputPath);
-            UploadData(cmd, fs);
+            return UploadData(cmd, fs);
         }
 
         /// <summary>
@@ -253,25 +244,26 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// 刷入非稀疏镜像
+        /// 刷入非稀疏镜像(Already Error check)
         /// </summary>
         public FastbootResponse FlashUnsparseImage(string partition, Stream stream, long length)
         {
             CurrentStepChanged?.Invoke(this, $"Sending {partition}");
-            FastbootResponse response = DownloadData(stream, length).ThrowIfError();
+            DownloadData(stream, length).ThrowIfError();
             CurrentStepChanged?.Invoke(this, $"Flashing {partition}");
             return RawCommand("flash:" + partition).ThrowIfError();
         }
 
         /// <summary>
-        /// 刷入稀疏镜像
+        /// 刷入稀疏镜像(Already Error check)
         /// </summary>
         public FastbootResponse FlashSparseImage(string partition, string filePath)
         {
             int count = 1;
             FastbootResponse response = new FastbootResponse();
-            int max_download_size = int.Parse(GetVar("max-download-size").TrimStart("0x"), 
-                System.Globalization.NumberStyles.HexNumber);
+            int max_download_size = SparseMaxDownloadSize;
+            int.TryParse(GetVar("max-download-size").TrimStart("0x"), 
+                System.Globalization.NumberStyles.HexNumber, null, out max_download_size);
             SparseFile sfile = SparseFile.FromImageFile(filePath);
             var parts = sfile.Resparse(max_download_size);
             foreach(var item in parts)
@@ -305,14 +297,14 @@ namespace SharpFastboot
             }
         }
 
-        public FastbootResponse SetActiveSlot(string slot) => RawCommand("set_active:" + slot).ThrowIfError();
-        public void ErasePartition(string partition)
+        public FastbootResponse SetActiveSlot(string slot) => RawCommand("set_active:" + slot);
+        public FastbootResponse ErasePartition(string partition)
         {
             if (HasSlot(partition))
             {
                 partition += "_" + GetCurrentSlot();
             }
-            RawCommand("erase:" + partition).ThrowIfError();
+            return RawCommand("erase:" + partition);
         }
 
         /// <summary>
@@ -352,12 +344,12 @@ namespace SharpFastboot
         /// <summary>
         /// 执行 OEM 命令
         /// </summary>
-        public FastbootResponse OemCommand(string oemCmd) => RawCommand("oem " + oemCmd).ThrowIfError();
+        public FastbootResponse OemCommand(string oemCmd) => RawCommand("oem " + oemCmd);
 
         /// <summary>
         /// 执行 Flashing 子命令 (现代解锁命令)
         /// </summary>
-        public FastbootResponse FlashingCommand(string subCmd) => RawCommand("flashing " + subCmd).ThrowIfError();
+        public FastbootResponse FlashingCommand(string subCmd) => RawCommand("flashing " + subCmd);
 
         public FastbootResponse FlashingUnlock() => FlashingCommand("unlock");
         public FastbootResponse FlashingLock() => FlashingCommand("lock");
@@ -372,35 +364,30 @@ namespace SharpFastboot
         /// <summary>
         /// 继续启动过程
         /// </summary>
-        public FastbootResponse Continue() => RawCommand("continue").ThrowIfError();
-
-        /// <summary>
-        /// 重启到 Bootloader (Fastboot)
-        /// </summary>
-        public FastbootResponse RebootBootloader() => RawCommand("reboot-bootloader").ThrowIfError();
+        public FastbootResponse Continue() => RawCommand("continue");
 
         /// <summary>
         /// 格式化分区
         /// </summary>
-        public FastbootResponse FormatPartition(string partition) => RawCommand("format:" + partition).ThrowIfError();
+        public FastbootResponse FormatPartition(string partition) => RawCommand("format:" + partition);
 
         /// <summary>
         /// 创建逻辑分区
         /// </summary>
         public FastbootResponse CreateLogicalPartition(string partition, long size)
-            => RawCommand($"create-logical-partition:{partition}:{size}").ThrowIfError();
+            => RawCommand($"create-logical-partition:{partition}:{size}");
 
         /// <summary>
         /// 删除逻辑分区
         /// </summary>
         public FastbootResponse DeleteLogicalPartition(string partition)
-            => RawCommand($"delete-logical-partition:{partition}").ThrowIfError();
+            => RawCommand($"delete-logical-partition:{partition}");
 
         /// <summary>
         /// 调整逻辑分区大小
         /// </summary>
         public FastbootResponse ResizeLogicalPartition(string partition, long size)
-            => RawCommand($"resize-logical-partition:{partition}:{size}").ThrowIfError();
+            => RawCommand($"resize-logical-partition:{partition}:{size}");
 
         /// <summary>
         /// 发送并引导内核 (不写入 Flash)
@@ -408,7 +395,7 @@ namespace SharpFastboot
         public FastbootResponse Boot(byte[] data)
         {
             DownloadData(data).ThrowIfError();
-            return RawCommand("boot").ThrowIfError();
+            return RawCommand("boot");
         }
 
         /// <summary>
@@ -418,7 +405,7 @@ namespace SharpFastboot
         {
             byte[] bootImg = CreateBootImage(kernel, ramdisk, second, cmdline, name, base_addr, page_size);
             DownloadData(bootImg).ThrowIfError();
-            return RawCommand("flash:" + partition).ThrowIfError();
+            return RawCommand("flash:" + partition);
         }
 
         /// <summary>
@@ -478,7 +465,7 @@ namespace SharpFastboot
         public FastbootResponse Signature(byte[] sigData)
         {
             DownloadData(sigData).ThrowIfError();
-            return RawCommand("signature").ThrowIfError();
+            return RawCommand("signature");
         }
 
         /// <summary>

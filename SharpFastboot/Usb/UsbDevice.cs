@@ -14,8 +14,8 @@ namespace SharpFastboot.Usb
         public UsbDeviceType UsbDeviceType { get; set; }
         public abstract byte[] Read(int length);
         public abstract long Write(byte[] data, int length);
-        public abstract Exception? GetSerialNumber();
-        public abstract Exception? CreateHandle();
+        public abstract int GetSerialNumber();
+        public abstract int CreateHandle();
         public abstract void Dispose();
     }
 

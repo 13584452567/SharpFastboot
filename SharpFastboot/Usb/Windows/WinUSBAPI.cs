@@ -52,12 +52,12 @@ namespace SharpFastboot.Usb.Windows
         public static extern bool WinUsb_QueryPipe(IntPtr DeviceHandle, byte interfaceNum, byte pipeIndex, out WinUSBPipeInfo info);
 
         [DllImport("Winusb.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
-        public static extern bool WinUsb_WritePipe(IntPtr DeviceHandle, byte pipeID, IntPtr buffer,
-            uint bufferLen, out uint bytesTransfered, IntPtr overlapp);
+        public static extern bool WinUsb_WritePipe(IntPtr DeviceHandle, byte pipeID, byte[] buffer,
+            ulong bufferLen, out ulong bytesTransfered, IntPtr overlapp);
 
         [DllImport("Winusb.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
-        public static extern bool WinUsb_ReadPipe(IntPtr DeviceHandle, byte pipeID, IntPtr buffer,
-            uint bufferLen, out uint bytesTransfered, IntPtr overlapp);
+        public static extern bool WinUsb_ReadPipe(IntPtr DeviceHandle, byte pipeID, byte[] buffer,
+            ulong bufferLen, out ulong bytesTransfered, IntPtr overlapp);
 
         [DllImport("Winusb.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern bool WinUsb_SetPipePolicy(IntPtr InterfaceHandle, byte PipeID, uint PolicyType, uint ValueLength, ref uint Value);

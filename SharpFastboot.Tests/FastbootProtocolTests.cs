@@ -86,7 +86,7 @@ namespace SharpFastboot.Tests
             var response = util.HandleResponse();
 
             Assert.Equal(FastbootState.Data, response.Result);
-            Assert.Equal(1024, response.Size);
+            Assert.Equal(1024, response.DataSize);
         }
     }
 }

@@ -31,18 +31,18 @@ namespace SharpFastboot.Usb.Windows
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern bool DeviceIoControl(nint device, uint code,
-                                                  nint inBuffer, int inBufferSize,
-                                                  nint outBuffer, int outBufferSize,
+                                                  byte[] inBuffer, int inBufferSize,
+                                                  byte[] outBuffer, int outBufferSize,
                                                   out int bytesReturned, nint overlapped);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall)]
         public static extern bool CloseHandle(nint handle);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
-        public static extern bool WriteFile(nint hFile, nint buffer, uint sizeToWrite, out uint bytesWritten, nint overlapped);
+        public static extern bool WriteFile(nint hFile, byte[] buffer, uint sizeToWrite, out ulong bytesWritten, nint overlapped);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]
-        public static extern bool ReadFile(nint hFile, nint buffer, uint sizeToRead, out uint bytesRead, nint overlapped);
+        public static extern bool ReadFile(nint hFile, byte[] buffer, uint sizeToRead, out uint bytesRead, nint overlapped);
 
         //USB
         public struct GUID
