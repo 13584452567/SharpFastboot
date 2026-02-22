@@ -42,7 +42,7 @@ namespace SharpFastboot.Usb.Linux
                             if (len < 2 || pos + len > n) break;
                             byte type = desc[pos + 1];
 
-                            if (type == 0x04) // Interface Descriptor
+                            if (type == 0x04)
                             {
                                 if (len < 9) { pos += len; continue; }
                                 byte ifcClass = desc[pos + 5];
@@ -63,13 +63,13 @@ namespace SharpFastboot.Usb.Linux
                                         if (ept_len < 2 || ept_pos + ept_len > n) break;
                                         byte ept_type = desc[ept_pos + 1];
 
-                                        if (ept_type == 0x05) // Endpoint Descriptor
+                                        if (ept_type == 0x05)
                                         {
                                             if (ept_len >= 7)
                                             {
                                                 byte addr = desc[ept_pos + 2];
                                                 byte attr = desc[ept_pos + 3];
-                                                if ((attr & 0x03) == 0x02) // Bulk
+                                                if ((attr & 0x03) == 0x02)
                                                 {
                                                     if ((addr & 0x80) != 0) epIn = addr;
                                                     else epOut = addr;
@@ -85,6 +85,8 @@ namespace SharpFastboot.Usb.Linux
                                         devices.Add(new LinuxUsbDevice
                                         {
                                             DevicePath = dev_path,
+                                            VendorId = idVendor,
+                                            ProductId = idProduct,
                                             ep_in = epIn,
                                             ep_out = epOut,
                                             InterfaceId = ifcId,

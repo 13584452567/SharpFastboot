@@ -21,7 +21,6 @@ public static class MetadataWriter
         using (var sha256 = SHA256.Create())
         {
             var hash = sha256.ComputeHash(blob);
-            // 校验和位于偏移 8 处
             for (var i = 0; i < 32; i++)
             {
                 blob[8 + i] = hash[i];
@@ -76,7 +75,6 @@ public static class MetadataWriter
         header.Magic = MetadataFormat.LP_METADATA_HEADER_MAGIC;
         header.HeaderSize = (uint)System.Runtime.CompilerServices.Unsafe.SizeOf<LpMetadataHeader>();
 
-        // 计算头部校验和之前先将其清零
         for (var i = 0; i < 32; i++)
         {
             header.HeaderChecksum[i] = 0;
@@ -86,7 +84,6 @@ public static class MetadataWriter
         MemoryMarshal.Write(headerBytes, in header);
 
         var headerHash = sha256.ComputeHash(headerBytes);
-        // 对应 header_checksum 的偏移为 12
         for (var i = 0; i < 32; i++)
         {
             headerBytes[12 + i] = headerHash[i];
@@ -135,9 +132,10 @@ public static class MetadataWriter
         // 写入主几何块及其备份
         stream.Seek(MetadataFormat.LP_PARTITION_RESERVED_BYTES, SeekOrigin.Begin);
         stream.Write(geometryBlob, 0, geometryBlob.Length);
+        
+        stream.Seek(MetadataFormat.LP_PARTITION_RESERVED_BYTES + MetadataFormat.LP_METADATA_GEOMETRY_SIZE, SeekOrigin.Begin);
         stream.Write(geometryBlob, 0, geometryBlob.Length);
 
-        // 将元数据写入所有插槽
         for (uint i = 0; i < metadata.Geometry.MetadataSlotCount; i++)
         {
             var primaryOffset = MetadataReader.GetPrimaryMetadataOffset(metadata.Geometry, i);

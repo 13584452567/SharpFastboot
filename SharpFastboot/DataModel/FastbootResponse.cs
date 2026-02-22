@@ -8,6 +8,7 @@
         public int DataSize { get; set; }
         public List<string> Info { get; set; } = new List<string>();
         public string Text { get; set; } = "";
+        public string? Hash { get; set; }
 
         public FastbootResponse ThrowIfError()
         {

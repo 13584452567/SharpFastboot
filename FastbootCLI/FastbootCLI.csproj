@@ -6,6 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>fastboot</AssemblyName>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <OptimizationPreference>Size</OptimizationPreference>
   </PropertyGroup>
 
   <ItemGroup>

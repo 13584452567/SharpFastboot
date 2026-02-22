@@ -108,15 +108,12 @@ namespace SharpFastboot.Usb.macOS
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate int DeviceRequestDelegate(IntPtr self, ref IOUSBDevRequest request);
 
-        // VTable offsets for IOCFPlugInInterface (Plugin factory)
         public const int Offset_Plugin_QueryInterface = 1;
         public const int Offset_Plugin_Release = 3;
 
-        // VTable offsets for common IUnknown (Interface, Device)
         public const int Offset_IUnknown_QueryInterface = 1;
         public const int Offset_IUnknown_Release = 3;
 
-        // VTable offsets for IOUSBDeviceInterface (relative to IUnknown start)
         public const int Offset_DeviceRequest = 7;
         public const int Offset_USBDeviceOpen = 14;
         public const int Offset_USBDeviceClose = 15;
@@ -128,7 +125,6 @@ namespace SharpFastboot.Usb.macOS
         public const int Offset_USBDeviceCreateInterfaceIterator = 26;
         public const int Offset_USBDeviceReset = 27;
 
-        // Delegates for IOUSBInterfaceInterface
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate int USBInterfaceOpenDelegate(IntPtr self);
 
@@ -150,13 +146,11 @@ namespace SharpFastboot.Usb.macOS
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate int ClearPipeStallBothEndsDelegate(IntPtr self, byte pipeRef);
 
-        // VTable offsets for IOUSBInterfaceInterface
-        // These are indices in the vtable (0-based)
         public const int Offset_USBInterfaceOpen = 8;
         public const int Offset_USBInterfaceClose = 9;
         public const int Offset_GetNumEndpoints = 17;
         public const int Offset_GetPipeProperties = 18;
-        public const int Offset_ClearPipeStallBothEnds = 25; // This may vary, but let's try 190+ offset
+        public const int Offset_ClearPipeStallBothEnds = 25;
         public const int Offset_ReadPipe = 26;
         public const int Offset_WritePipe = 27;
         public const int Offset_ReadPipeTO = 28;
@@ -172,7 +166,7 @@ namespace SharpFastboot.Usb.macOS
         {
             IntPtr vtable = Marshal.ReadIntPtr(self);
             IntPtr methodPtr = Marshal.ReadIntPtr(vtable, offset * IntPtr.Size);
-            return (T)(object)Marshal.GetDelegateForFunctionPointer(methodPtr, typeof(T));
+            return Marshal.GetDelegateForFunctionPointer<T>(methodPtr);
         }
     }
 }

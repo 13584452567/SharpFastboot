@@ -1,8 +1,5 @@
 namespace LibSparseSharp;
 
-/// <summary>
-/// CRC32 校验工具类，暂时写在这里，实际并未使用
-/// </summary>
 public static class Crc32
 {
     private static readonly uint[] CrcTable = new uint[256];

@@ -24,5 +24,19 @@ namespace SharpFastboot
             Marshal.FreeHGlobal(ptr);
             return data;
         }
+
+        public static T Deserialize<T>(Stream stream) where T : struct
+        {
+            int size = Marshal.SizeOf(typeof(T));
+            byte[] buffer = new byte[size];
+            stream.ReadExactly(buffer, 0, size);
+            return Bytes2Struct<T>(buffer, size);
+        }
+
+        public static void Serialize<T>(Stream stream, T str) where T : struct
+        {
+            byte[] buffer = Struct2Bytes<T>(str);
+            stream.Write(buffer, 0, buffer.Length);
+        }
     }
 }

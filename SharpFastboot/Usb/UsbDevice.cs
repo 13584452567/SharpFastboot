@@ -4,6 +4,8 @@
     {
         public required string DevicePath { get; set; }
         public string? SerialNumber { get; set; }
+        public ushort VendorId { get; set; }
+        public ushort ProductId { get; set; }
         public UsbDeviceType UsbDeviceType { get; set; }
         public abstract byte[] Read(int length);
         public abstract long Write(byte[] data, int length);

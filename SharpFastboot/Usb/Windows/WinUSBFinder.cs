@@ -1,12 +1,16 @@
 ﻿using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using static SharpFastboot.Usb.Windows.Win32API;
 
 namespace SharpFastboot.Usb.Windows
 {
     public class WinUSBFinder
     {
-        private static GUID AndroidUsbGUID =
+        /// <summary>
+        /// Standard Google Android USB Driver Interface GUID. Most modern Fastboot drivers use this.
+        /// </summary>
+        public static GUID AndroidUsbGUID =
             new GUID
             {
                 Data1 = 0xf72fe0d4,
@@ -14,6 +18,28 @@ namespace SharpFastboot.Usb.Windows
                 Data3 = 0x407d,
                 Data4 = [0x88, 0x14, 0x9e, 0xd6, 0x73, 0xd0, 0xdd, 0x6b]
             };
+
+        /// <summary>
+        /// List of known Fastboot Vendor IDs for matching when discovering devices.
+        /// </summary>
+        public static readonly ushort[] KnownVendorIds =
+        {
+            0x18d1,
+            0x0451,
+            0x0502,
+            0x0fce,
+            0x05c6,
+            0x22b8,
+            0x0955,
+            0x413c,
+            0x0bb4,
+            0x1921,
+            0x2717,
+            0x12d1,
+            0x04e8,
+            0x0502,
+            0x0b05,
+        };
 
         public static readonly uint IoGetDescriptorCode = ((FILE_DEVICE_UNKNOWN) << 16) | ((FILE_READ_ACCESS) << 14) | ((10) << 2) | (METHOD_BUFFERED);
 
@@ -51,6 +77,8 @@ namespace SharpFastboot.Usb.Windows
                             if (!isLegacy.HasValue)
                                 continue;
 
+                            var (vid, pid) = ParseVidPid(devicePath);
+
                             UsbDevice usb;
                             if (isLegacy.Value)
                             {
@@ -62,6 +90,10 @@ namespace SharpFastboot.Usb.Windows
                                 usb = new WinUSBDevice { DevicePath = devicePath };
                                 usb.UsbDeviceType = UsbDeviceType.WinUSB;
                             }
+                            
+                            usb.VendorId = vid;
+                            usb.ProductId = pid;
+                            
                             if (usb.CreateHandle() == 0)
                                 devices.Add(usb);
                             else
@@ -81,6 +113,16 @@ namespace SharpFastboot.Usb.Windows
                 SetupDiDestroyDeviceInfoList(devInfo);
             }
             return devices;
+        }
+
+        private static (ushort vid, ushort pid) ParseVidPid(string path)
+        {
+            var match = Regex.Match(path, @"VID_([0-9A-F]{4})&PID_([0-9A-F]{4})", RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                return (Convert.ToUInt16(match.Groups[1].Value, 16), Convert.ToUInt16(match.Groups[2].Value, 16));
+            }
+            return (0, 0);
         }
 
         private static uint GetInterfaceDetailDataRequiredSize(IntPtr devInfo, SpDeviceInterfaceData interfaceData)

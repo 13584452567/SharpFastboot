@@ -146,20 +146,20 @@ namespace FastbootCLI
                     }
                     break;
                 case "reboot":
-                    if (args.Count == 0 || args[0] == "system") util.RawCommand("reboot");
-                    else if (args[0] == "bootloader") util.Reboot("bootloader");
-                    else if (args[0] == "recovery") util.Reboot("recovery");
-                    else if (args[0] == "fastboot") util.Reboot("fastboot");
-                    else util.RawCommand("reboot-" + args[0]);
+                    if (args.Count == 0 || args[0] == "system") util.RawCommand("reboot").ThrowIfError();
+                    else if (args[0] == "bootloader") util.Reboot("bootloader").ThrowIfError();
+                    else if (args[0] == "recovery") util.Reboot("recovery").ThrowIfError();
+                    else if (args[0] == "fastboot") util.Reboot("fastboot").ThrowIfError();
+                    else util.RawCommand("reboot-" + args[0]).ThrowIfError();
                     break;
                 case "reboot-bootloader":
-                    util.Reboot("bootloader");
+                    util.Reboot("bootloader").ThrowIfError();
                     break;
                 case "reboot-recovery":
-                    util.Reboot("recovery");
+                    util.Reboot("recovery").ThrowIfError();
                     break;
                 case "reboot-fastboot":
-                    util.Reboot("fastboot");
+                    util.Reboot("fastboot").ThrowIfError();
                     break;
                 case "flash":
                     {
@@ -168,10 +168,25 @@ namespace FastbootCLI
                         string? file = args.Count > 1 ? args[1] : null;
                         if (file == null) throw new Exception("flash: filename required (auto-discovery not implemented)");
 
-                        string target = part;
-                        if (slot != null && util.HasSlot(part)) target = part + "_" + slot;
-
-                        util.FlashImage(target, file);
+                        if (file.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) && (part == "update" || part == "zip"))
+                        {
+                            util.FlashZip(file);
+                        }
+                        else if (part == "raw")
+                        {
+                            if (args.Count < 2) throw new Exception("flash raw: usage: flash raw <partition> <kernel> [ <ramdisk> ]");
+                            string targetPartition = args[1];
+                            string kernelPath = args[2];
+                            string? ramdiskPath = args.Count > 3 ? args[3] : null;
+                            util.FlashRaw(targetPartition, kernelPath, ramdiskPath).ThrowIfError();
+                        }
+                        else
+                        {
+                            string target = part;
+                            if (slot != null && util.HasSlot(part)) target = part + "_" + slot;
+                            util.FlashImage(target, file);
+                        }
+                        Console.WriteLine("OKAY");
                     }
                     break;
                 case "erase":
@@ -179,7 +194,8 @@ namespace FastbootCLI
                     {
                         string target = args[0];
                         if (slot != null && util.HasSlot(args[0])) target = args[0] + "_" + slot;
-                        util.ErasePartition(target);
+                        util.ErasePartition(target).ThrowIfError();
+                        Console.WriteLine("OKAY");
                     }
                     break;
                 case "format":
@@ -189,27 +205,32 @@ namespace FastbootCLI
                         string target = args[0];
                         if (target.Contains(":")) target = target.Split(':').Last(); // Very simple parsing
                         if (slot != null && util.HasSlot(target)) target = target + "_" + slot;
-                        util.FormatPartition(target);
+                        util.FormatPartition(target).ThrowIfError();
+                        Console.WriteLine("OKAY");
                     }
                     break;
                 case "continue":
-                    util.Continue();
+                    util.Continue().ThrowIfError();
                     break;
                 case "set_active":
                     if (args.Count == 0) throw new Exception("set_active: usage: set_active <slot>");
-                    util.SetActiveSlot(args[0]);
+                    util.SetActiveSlot(args[0]).ThrowIfError();
+                    Console.WriteLine("OKAY");
                     break;
                 case "oem":
                     if (args.Count == 0) throw new Exception("oem: usage: oem <command>");
-                    util.OemCommand(string.Join(" ", args));
+                    util.OemCommand(string.Join(" ", args)).ThrowIfError();
+                    Console.WriteLine("OKAY");
                     break;
                 case "flashing":
                     if (args.Count == 0) throw new Exception("flashing: usage: flashing <subcommand>");
-                    util.FlashingCommand(string.Join("_", args));
+                    util.FlashingCommand(string.Join("_", args)).ThrowIfError();
+                    Console.WriteLine("OKAY");
                     break;
                 case "snapshot-update":
-                    if (args.Count == 0) util.SnapshotUpdate();
-                    else util.SnapshotUpdate(args[0]);
+                    if (args.Count == 0) util.SnapshotUpdate().ThrowIfError();
+                    else util.SnapshotUpdate(args[0]).ThrowIfError();
+                    Console.WriteLine("OKAY");
                     break;
                 case "fetch":
                     if (args.Count < 2) throw new Exception("fetch: usage: fetch <partition> <filename>");
@@ -232,10 +253,39 @@ namespace FastbootCLI
                     util.ResizeLogicalPartition(args[0], ParseSize(args[1]));
                     break;
                 case "boot":
+                    if (args.Count < 1) throw new Exception("boot: usage: boot <kernel> [ <ramdisk> [ <second> ] ]");
+                    {
+                        string kernel = args[0];
+                        string? ramdisk = args.Count > 1 ? args[1] : null;
+                        string? second = args.Count > 2 ? args[2] : null;
+                        util.Boot(kernel, ramdisk, second).ThrowIfError();
+                        Console.WriteLine("OKAY");
+                    }
+                    break;
                 case "flashall":
-                case "update":
+                    {
+                        string? productOut = Environment.GetEnvironmentVariable("ANDROID_PRODUCT_OUT");
+                        if (string.IsNullOrEmpty(productOut))
+                        {
+                            // If not set, maybe use current directory?
+                            productOut = Directory.GetCurrentDirectory();
+                        }
+                        util.FlashAll(productOut, wipe);
+                        Console.WriteLine("OKAY");
+                    }
+                    break;
                 case "stage":
-                    Console.Error.WriteLine($"{command} command is not implemented in current library version");
+                    if (args.Count == 0) throw new Exception("stage: usage: stage <filename>");
+                    using (var fs = File.OpenRead(args[0]))
+                    {
+                        util.Stage(fs, fs.Length).ThrowIfError();
+                    }
+                    Console.WriteLine("OKAY");
+                    break;
+                case "update":
+                    if (args.Count == 0) throw new Exception("update: usage: update <filename.zip>");
+                    util.FlashZip(args[0]);
+                    Console.WriteLine("OKAY");
                     break;
                 default:
                     throw new Exception("unknown command: " + command);
@@ -296,30 +346,8 @@ namespace FastbootCLI
 
         static FastbootUtil? ConnectDevice()
         {
-            var devices = GetAllDevices();
-            if (devices.Count == 0) return null;
-
-            UsbDevice? target = null;
-            if (serial != null)
-            {
-                foreach (var d in devices)
-                {
-                    d.GetSerialNumber();
-                    if (d.SerialNumber == serial)
-                    {
-                        target = d;
-                        break;
-                    }
-                }
-            }
-            else
-            {
-                target = devices[0];
-            }
-
-            if (target == null) return null;
-            if (target.CreateHandle() != 0) return null;
-            return new FastbootUtil(target);
+            // 使用 WaitForDevice 进行探测，默认超时 3 秒以便对刚重启进入 fastboot 的设备更友好
+            return FastbootUtil.WaitForDevice(GetAllDevices, serial, 3);
         }
 
         static void ShowHelp()
@@ -327,16 +355,29 @@ namespace FastbootCLI
             Console.WriteLine("usage: fastboot [ <option> ] <command>");
             Console.WriteLine("");
             Console.WriteLine("commands:");
-            Console.WriteLine("  update <filename>                        Reflash device from update.zip [NOT IMPLEMENTED]");
-            Console.WriteLine("  flashall                                 Flash boot, system, and if found, recovery [NOT IMPLEMENTED]");
+            Console.WriteLine("  update <filename.zip>                    Reflash device from update.zip");
+            Console.WriteLine("  flashall                                 Flash all images in ANDROID_PRODUCT_OUT");
             Console.WriteLine("  flash <partition> [ <filename> ]         Write a file to a flash partition");
+            Console.WriteLine("  flash raw <partition> <kernel> [ <rdisk> ] Create bootimage and flash it");
             Console.WriteLine("  erase <partition>                        Erase a flash partition");
             Console.WriteLine("  format <partition>                       Format a flash partition");
             Console.WriteLine("  getvar <variable>                        Display a bootloader variable");
-            Console.WriteLine("  boot <kernel> [ <ramdisk> ]              Download and boot kernel [NOT IMPLEMENTED]");
+            Console.WriteLine("  boot <kernel> [ <ramdisk> [ <second> ] ] Download and boot kernel");
+            Console.WriteLine("  stage <filename>                         Stage a file into memory");
             Console.WriteLine("  continue                                 Continue with the boot protocol");
             Console.WriteLine("  reboot [bootloader|recovery|fastboot]    Reboot device");
             Console.WriteLine("  reboot-bootloader                        Reboot device into bootloader");
+            Console.WriteLine("  set_active <slot>                        Sets the active slot");
+            Console.WriteLine("  oem <command>                            Executes an OEM-specific command");
+            Console.WriteLine("  flashing <subcommand>                    Executes a flashing command");
+            Console.WriteLine("  snapshot-update [cancel|merge]           Virtual A/B snapshot update");
+            Console.WriteLine("  fetch <partition> <filename>             Fetch data from a partition");
+            Console.WriteLine("  get_staged <filename>                    Read staged data");
+            Console.WriteLine("  create-logical-partition <name> <size>   Create a logical partition");
+            Console.WriteLine("  delete-logical-partition <name>          Delete a logical partition");
+            Console.WriteLine("  resize-logical-partition <name> <size>   Resize a logical partition");
+            Console.WriteLine("  devices                                  List all connected devices");
+            Console.WriteLine("  version                                  Show version");
             Console.WriteLine("  help                                     Show this help message");
             Console.WriteLine("");
             Console.WriteLine("options:");

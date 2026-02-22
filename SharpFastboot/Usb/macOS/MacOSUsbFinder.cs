@@ -63,8 +63,7 @@ namespace SharpFastboot.Usb.macOS
                             IntPtr ifcService;
                             while ((ifcService = IOIteratorNext(interfaceIter)) != IntPtr.Zero)
                             {
-                                // Found potential fastboot interface
-                                // Create plugin for interface to get more details
+
                                 IntPtr ifcPlugin = IntPtr.Zero;
                                 if (IOCreatePlugInInterfaceForService(ifcService, kIOUSBInterfaceUserClientTypeID, kIOCFPlugInInterfaceID, out ifcPlugin, out score) == 0 && ifcPlugin != IntPtr.Zero)
                                 {
@@ -89,7 +88,7 @@ namespace SharpFastboot.Usb.macOS
                                                     ushort maxPacketSize;
                                                     if (getPipeProps(ifcIntf, i, out direction, out number, out transferType, out maxPacketSize, out interval) == 0)
                                                     {
-                                                        if (transferType == 0x02) // Bulk
+                                                        if (transferType == 0x02)
                                                         {
                                                             if (direction == 1) bulkIn = i;
                                                             else bulkOut = i;
@@ -102,6 +101,8 @@ namespace SharpFastboot.Usb.macOS
                                                     devices.Add(new MacOSUsbDevice
                                                     {
                                                         DevicePath = devicePath,
+                                                        VendorId = vid,
+                                                        ProductId = pid,
                                                         bulkIn = bulkIn,
                                                         bulkOut = bulkOut,
                                                         UsbDeviceType = UsbDeviceType.MacOS
