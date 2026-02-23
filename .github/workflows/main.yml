@@ -1,9 +1,7 @@
 name: Sync AOSP Code
 
 on:
-  workflow_dispatch: # 手动触发
-  schedule:
-    - cron: '0 0 * * 1' # 每周一北京时间 8 点运行 (UTC 0)
+  workflow_dispatch:
 
 jobs:
   sync_and_release:
@@ -20,17 +18,19 @@ jobs:
           mkdir -p aosp_code
           mkdir -p aosp_code/adb
           mkdir -p aosp_code/fastboot
+          mkdir -p aosp_code/external/e2fsprogs
+          mkdir -p aosp_code/external/f2fs-tools
+          mkdir -p aosp_code/external/avb
+          mkdir -p aosp_code/system/extras/liblp
+          mkdir -p aosp_code/system/tools/mkbootimg
 
       - name: Pull adb code
-        # 现代 AOSP 中 adb 通常在 packages/modules/adb
-        # 旧版本或某些分支在 system/core/adb
         run: |
           git clone --depth 1 https://android.googlesource.com/platform/packages/modules/adb aosp_adb_temp
           if [ -d "aosp_adb_temp" ]; then
             cp -r aosp_adb_temp/* aosp_code/adb/
             rm -rf aosp_adb_temp
           else
-             # 如果失败，则去 system/core 里的子目录找
              git clone --depth 1 https://android.googlesource.com/platform/system/core aosp_core_temp
              cp -r aosp_core_temp/adb/* aosp_code/adb/
              rm -rf aosp_core_temp
@@ -38,16 +38,39 @@ jobs:
 
       - name: Pull fastboot code
         run: |
-          # fastboot 长期在 system/core/fastboot
           git clone --depth 1 https://android.googlesource.com/platform/system/core aosp_core_temp
           cp -r aosp_core_temp/fastboot/* aosp_code/fastboot/
           rm -rf aosp_core_temp
 
+      - name: Pull e2fsprogs code
+        run: |
+          git clone --depth 1 https://android.googlesource.com/platform/external/e2fsprogs aosp_e2fsprogs_temp
+          cp -r aosp_e2fsprogs_temp/* aosp_code/external/e2fsprogs/
+          rm -rf aosp_e2fsprogs_temp
+
+      - name: Pull f2fs-tools code
+        run: |
+          git clone --depth 1 https://android.googlesource.com/platform/external/f2fs-tools aosp_f2fs_temp
+          cp -r aosp_f2fs_temp/* aosp_code/external/f2fs-tools/
+          rm -rf aosp_f2fs_temp
+      
+      - name: Pull AVB code
+        run: |
+          git clone --depth 1 https://android.googlesource.com/platform/external/avb aosp_avb_temp
+          cp -r aosp_avb_temp/* aosp_code/external/avb/
+          rm -rf aosp_avb_temp
+
+      - name: Pull liblp code
+        run: |
+          git clone --depth 1 https://android.googlesource.com/platform/system/extras aosp_extras_temp
+          cp -r aosp_extras_temp/liblp/* aosp_code/system/extras/liblp/
+          rm -rf aosp_extras_temp
+
       - name: Create Archive
         run: |
           VERSION=$(date +'%Y%m%d')
-          zip -r "aosp-adb-fastboot-${VERSION}.zip" aosp_code/
-          echo "ARCHIVE_NAME=aosp-adb-fastboot-${VERSION}.zip" >> $GITHUB_ENV
+          zip -r "aosp-code-all-${VERSION}.zip" aosp_code/
+          echo "ARCHIVE_NAME=aosp-code-all-${VERSION}.zip" >> $GITHUB_ENV
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
