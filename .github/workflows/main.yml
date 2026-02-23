@@ -1,0 +1,58 @@
+name: Sync AOSP Code
+
+on:
+  workflow_dispatch: # 手动触发
+  schedule:
+    - cron: '0 0 * * 1' # 每周一北京时间 8 点运行 (UTC 0)
+
+jobs:
+  sync_and_release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Create working directory
+        run: |
+          mkdir -p aosp_code
+          mkdir -p aosp_code/adb
+          mkdir -p aosp_code/fastboot
+
+      - name: Pull adb code
+        # 现代 AOSP 中 adb 通常在 packages/modules/adb
+        # 旧版本或某些分支在 system/core/adb
+        run: |
+          git clone --depth 1 https://android.googlesource.com/platform/packages/modules/adb aosp_adb_temp
+          if [ -d "aosp_adb_temp" ]; then
+            cp -r aosp_adb_temp/* aosp_code/adb/
+            rm -rf aosp_adb_temp
+          else
+             # 如果失败，则去 system/core 里的子目录找
+             git clone --depth 1 https://android.googlesource.com/platform/system/core aosp_core_temp
+             cp -r aosp_core_temp/adb/* aosp_code/adb/
+             rm -rf aosp_core_temp
+          fi
+
+      - name: Pull fastboot code
+        run: |
+          # fastboot 长期在 system/core/fastboot
+          git clone --depth 1 https://android.googlesource.com/platform/system/core aosp_core_temp
+          cp -r aosp_core_temp/fastboot/* aosp_code/fastboot/
+          rm -rf aosp_core_temp
+
+      - name: Create Archive
+        run: |
+          VERSION=$(date +'%Y%m%d')
+          zip -r "aosp-adb-fastboot-${VERSION}.zip" aosp_code/
+          echo "ARCHIVE_NAME=aosp-adb-fastboot-${VERSION}.zip" >> $GITHUB_ENV
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ${{ env.ARCHIVE_NAME }}
+          path: ${{ env.ARCHIVE_NAME }}
+          retention-days: 7
