@@ -63,8 +63,23 @@ jobs:
       - name: Pull liblp code
         run: |
           git clone --depth 1 https://android.googlesource.com/platform/system/extras aosp_extras_temp
-          cp -r aosp_extras_temp/liblp/* aosp_code/system/extras/liblp/
+          if [ -d "aosp_extras_temp/liblp" ]; then
+            cp -r aosp_extras_temp/liblp/* aosp_code/system/extras/liblp/
+          else
+            # Fallback searching in system/core if it moved there
+            git clone --depth 1 https://android.googlesource.com/platform/system/core aosp_core_temp_lp
+            if [ -d "aosp_core_temp_lp/liblp" ]; then
+               cp -r aosp_core_temp_lp/liblp/* aosp_code/system/extras/liblp/
+            fi
+            rm -rf aosp_core_temp_lp
+          fi
           rm -rf aosp_extras_temp
+
+      - name: Pull mkbootimg code
+        run: |
+          git clone --depth 1 https://android.googlesource.com/platform/system/tools/mkbootimg aosp_mkbootimg_temp
+          cp -r aosp_mkbootimg_temp/* aosp_code/system/tools/mkbootimg/
+          rm -rf aosp_mkbootimg_temp
 
       - name: Create Archive
         run: |
