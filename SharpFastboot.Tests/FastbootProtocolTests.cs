@@ -77,16 +77,16 @@ namespace SharpFastboot.Tests
         }
 
         [Fact]
-        public void HandleResponse_Data_ReturnsDataAndSize()
+        public void HandleResponse_LargeData_ReturnsDataAndSize()
         {
             var mockUsb = new MockUsbDevice { DevicePath = "mock" };
-            mockUsb.EnqueueResponse("DATA00000400"); // 1024 in hex
+            mockUsb.EnqueueResponse("DATA80000000"); // 2GB in hex
             var util = new FastbootUtil(mockUsb);
 
             var response = util.HandleResponse();
 
             Assert.Equal(FastbootState.Data, response.Result);
-            Assert.Equal(1024, response.DataSize);
+            Assert.Equal(2147483648L, response.DataSize);
         }
     }
 }

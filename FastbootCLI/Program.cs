@@ -118,6 +118,14 @@ namespace FastbootCLI
 
             util.CurrentStepChanged += (s, e) => Console.Error.WriteLine(e + "...");
 
+            util.DataTransferProgressChanged += (s, e) =>
+            {
+                var (current, total) = e;
+                double percent = (double)current / total * 100;
+                Console.Error.Write($"\rProgress: {percent:F1}% ({current}/{total} bytes)    ");
+                if (current == total) Console.Error.WriteLine();
+            };
+
             // If slot is specified, we might want to ensure we're targeting it
             // However, we'll let FastbootUtil handle its defaults for now unless we explicitly override.
 

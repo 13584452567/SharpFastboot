@@ -5,7 +5,7 @@
         public FastbootState Result { get; set; }
         public string Response { get; set; } = "";
         public byte[]? Data { get; set; }
-        public int DataSize { get; set; }
+        public long DataSize { get; set; }
         public List<string> Info { get; set; } = new List<string>();
         public string Text { get; set; } = "";
         public string? Hash { get; set; }

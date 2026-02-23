@@ -84,7 +84,7 @@ namespace SharpFastboot
                 else if (prefix == "DATA")
                 {
                     response.Result = FastbootState.Data;
-                    response.DataSize = int.Parse(content, System.Globalization.NumberStyles.HexNumber);
+                    response.DataSize = long.Parse(content, System.Globalization.NumberStyles.HexNumber);
                     return response;
                 }
                 else
@@ -307,11 +307,11 @@ namespace SharpFastboot
             if (response.Result != FastbootState.Data)
                 throw new Exception("Unexpected response for upload: " + response.Result);
 
-            int size = response.DataSize;
-            int bytesDownloaded = 0;
+            long size = response.DataSize;
+            long bytesDownloaded = 0;
             while (bytesDownloaded < size)
             {
-                int toRead = Math.Min(OnceSendDataSize, size - bytesDownloaded);
+                int toRead = (int)Math.Min(OnceSendDataSize, size - bytesDownloaded);
                 byte[] data = UsbDevice.Read(toRead);
                 if (data == null || data.Length == 0) throw new Exception("Unexpected EOF from USB.");
                 output.Write(data, 0, data.Length);
@@ -346,7 +346,13 @@ namespace SharpFastboot
         /// </summary>
         public FastbootResponse Fetch(string partition, string outputPath, long offset = 0, long size = -1)
         {
-            string cmd = "fetch:" + partition;
+            string targetPartition = partition;
+            if (HasSlot(partition))
+            {
+                targetPartition = partition + "_" + GetCurrentSlot();
+            }
+
+            string cmd = "fetch:" + targetPartition;
             if (offset > 0 || size > 0)
             {
                 cmd += ":" + offset.ToString("x8");
@@ -358,6 +364,15 @@ namespace SharpFastboot
 
             using var fs = File.Create(outputPath);
             return UploadData(cmd, fs);
+        }
+
+        /// <summary>
+        /// 执行 legacy upload 指令，回传设备镜像或日志 (如 upload:last_kmsg)
+        /// </summary>
+        public FastbootResponse Upload(string filename, string outputPath)
+        {
+            using var fs = File.Create(outputPath);
+            return UploadData("upload:" + filename, fs);
         }
 
         /// <summary>
