@@ -28,15 +28,11 @@ public static class MetadataReader
                 if (stream.Read(buffer, 0, buffer.Length) == buffer.Length)
                 {
                     ParseGeometry(buffer, out var geometry);
-                    // 找到有效的几何数据，读取主元数据槽位 0
-                    // 元数据通常位于几何数据块（主+备）之后
-                    // 如果 offset 是 4096 或 0，这是正确的。
-                    // 如果 offset 是 8192 (备份)，我们仍然应该从主元数据（基于主几何位置）读取？
-                    // 按照 liblp 逻辑，这取决于镜像的具体布局。这里简化为从该几何位置计算元数据。
+                    // 找到有效的几何数据，根据读取位置（主/备）计算下层元数据基址偏移
                     var metadataOffset = offset;
                     if (offset == MetadataFormat.LP_PARTITION_RESERVED_BYTES + MetadataFormat.LP_METADATA_GEOMETRY_SIZE)
                     {
-                        // 如果读到的是备份几何，主几何应该在前一个块
+                        // 正在从备份几何位置读取，由于 LibLp 总从对应主几何后寻找元数据，此处需向前回推到主几何位置
                         metadataOffset -= MetadataFormat.LP_METADATA_GEOMETRY_SIZE;
                     }
 

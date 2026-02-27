@@ -1,6 +1,6 @@
 ﻿namespace SharpFastboot.Usb
 {
-    public abstract class UsbDevice : IDisposable
+    public abstract class UsbDevice : IFastbootTransport
     {
         public required string DevicePath { get; set; }
         public string? SerialNumber { get; set; }

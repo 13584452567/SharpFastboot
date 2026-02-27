@@ -1,25 +1,28 @@
-ï»¿using LibSparseSharp;
+using LibSparseSharp;
 using SharpFastboot.DataModel;
 using SharpFastboot.Usb;
 using System.Runtime.InteropServices;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using LibLpSharp;
 
 namespace SharpFastboot
 {
     public class FastbootUtil
     {
-        public UsbDevice UsbDevice { get; private set; }
+        public IFastbootTransport Transport { get; private set; }
         private Dictionary<string, string> _varCache = new Dictionary<string, string>();
         private Dictionary<string, bool> _hasSlotCache = new Dictionary<string, bool>();
+        private HashSet<string>? _logicalPartitionsFromMetadata = null;
 
-        public FastbootUtil(UsbDevice usb) => UsbDevice = usb;
+        public FastbootUtil(IFastbootTransport transport) => Transport = transport;
         public static int ReadTimeoutSeconds = 30;
         public static int OnceSendDataSize = 1024 * 1024;
         public static int SparseMaxDownloadSize = 256 * 1024 * 1024;
 
         private static readonly string[] PartitionPriority = {
+            "preloader", "bootloader", "radio", "dram", "md1img", "xbl", "abl", "keystore", // SOC critical
             "boot", "dtbo", "init_boot", "vendor_boot", "pvmfw",
             "vbmeta", "vbmeta_system", "vbmeta_vendor", "vbmeta_custom",
             "recovery", "system", "vendor", "product", "system_ext", "odm", "vendor_dlkm", "odm_dlkm", "system_dlkm"
@@ -29,8 +32,13 @@ namespace SharpFastboot
         public event EventHandler<(long, long)>? DataTransferProgressChanged;
         public event EventHandler<string>? CurrentStepChanged;
 
+        public void NotifyCurrentStep(string step) => CurrentStepChanged?.Invoke(this, step);
+        public void NotifyProgress(long current, long total) => DataTransferProgressChanged?.Invoke(this, (current, total));
+        public void NotifyReceived(FastbootState state, string? info = null, string? text = null) 
+            => ReceivedFromDevice?.Invoke(this, new FastbootReceivedFromDeviceEventArgs(state, info, text));
+
         /// <summary>
-        /// å¤„ç†è¯·æ±‚
+        /// ´¦ÀíÇëÇó
         /// </summary>
         public FastbootResponse HandleResponse()
         {
@@ -41,7 +49,7 @@ namespace SharpFastboot
                 byte[] data;
                 try
                 {
-                    data = UsbDevice.Read(256);
+                    data = Transport.Read(256);
                 }
                 catch (Exception e)
                 {
@@ -99,14 +107,14 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// å‘é€å‘½ä»¤
+        /// ·¢ËÍÃüÁî
         /// </summary>
         public FastbootResponse RawCommand(string command)
         {
             byte[] cmdBytes = Encoding.UTF8.GetBytes(command);
             try
             {
-                if (UsbDevice.Write(cmdBytes, cmdBytes.Length) != cmdBytes.Length)
+                if (Transport.Write(cmdBytes, cmdBytes.Length) != cmdBytes.Length)
                     return new FastbootResponse { Result = FastbootState.Fail, Response = "command write failed (short transfer)" };
             }
             catch (Exception e)
@@ -117,11 +125,11 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// ç­‰å¾…è®¾å¤‡è¿æ¥ (é˜»å¡è°ƒç”¨)
+        /// µÈ´ıÉè±¸Á¬½Ó (×èÈûµ÷ÓÃ)
         /// </summary>
-        /// <param name="deviceFinder">å‘ç°è®¾å¤‡çš„æ–¹æ³•ï¼Œå¦‚ FastbootCLI ä¸­çš„ GetAllDevices</param>
-        /// <param name="serial">å¯é€‰ï¼šæŒ‡å®šåºåˆ—å·</param>
-        /// <param name="timeoutSeconds">è¶…æ—¶æ—¶é•¿ï¼ˆç§’ï¼‰ï¼Œ-1 è¡¨ç¤ºæ°¸ä¹…ç­‰å¾…</param>
+        /// <param name="deviceFinder">·¢ÏÖÉè±¸µÄ·½·¨£¬Èç FastbootCLI ÖĞµÄ GetAllDevices</param>
+        /// <param name="serial">¿ÉÑ¡£ºÖ¸¶¨ĞòÁĞºÅ</param>
+        /// <param name="timeoutSeconds">³¬Ê±Ê±³¤£¨Ãë£©£¬-1 ±íÊ¾ÓÀ¾ÃµÈ´ı</param>
         public static FastbootUtil? WaitForDevice(Func<List<UsbDevice>> deviceFinder, string? serial = null, int timeoutSeconds = -1)
         {
             DateTime start = DateTime.Now;
@@ -165,20 +173,61 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// æ˜¯å¦å¤„äº fastbootd (userspace) æ¨¡å¼
+        /// ÊÇ·ñ´¦ÓÚ fastbootd (userspace) Ä£Ê½
         /// </summary>
         public bool IsUserspace()
         {
             try { return GetVar("is-userspace") == "yes"; } catch { return false; }
         }
 
+        private void LoadLogicalPartitionsFromMetadata(string metadataPath)
+        {
+            if (!File.Exists(metadataPath)) return;
+            try
+            {
+                var metadata = MetadataReader.ReadFromImageFile(metadataPath);
+                _logicalPartitionsFromMetadata = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var p in metadata.Partitions)
+                {
+                    _logicalPartitionsFromMetadata.Add(p.GetName());
+                }
+            }
+            catch (Exception ex)
+            {
+                // Silently fails, as this is just an optimization
+                System.Diagnostics.Debug.WriteLine($"Failed to load logical partitions from metadata: {ex.Message}");
+            }
+        }
+
+        private bool IsLogicalOptimized(string partition)
+        {
+            if (_logicalPartitionsFromMetadata != null)
+            {
+                // Check direct name
+                if (_logicalPartitionsFromMetadata.Contains(partition)) return true;
+
+                // Check without suffixes if current partition has one
+                string withoutSuffix = partition;
+                if (partition.EndsWith("_a") || partition.EndsWith("_b"))
+                    withoutSuffix = partition.Substring(0, partition.Length - 2);
+
+                if (_logicalPartitionsFromMetadata.Contains(withoutSuffix)) return true;
+                
+                // If it's still not found, we assume it's NOT logical based on the metadata we loaded.
+                // However, some partitions might have been added dynamic manually? Unlikely.
+                return false;
+            }
+            // Fallback to GetVar
+            return IsLogical(partition);
+        }
+
         /// <summary>
-        /// æ‰§è¡Œ GSI ç›¸å…³å‘½ä»¤
+        /// Ö´ĞĞ GSI Ïà¹ØÃüÁî
         /// </summary>
         public FastbootResponse GsiCommand(string subCmd) => RawCommand("gsi:" + subCmd);
 
         /// <summary>
-        /// è·å–æ‰€æœ‰å±æ€§
+        /// »ñÈ¡ËùÓĞÊôĞÔ
         /// </summary>
         public Dictionary<string, string> GetVarAll()
         {
@@ -200,7 +249,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// è·å–å•ä¸ªå±æ€§ï¼ˆå¸¦ç¼“å­˜ï¼‰
+        /// »ñÈ¡µ¥¸öÊôĞÔ£¨´ø»º´æ£©
         /// </summary>
         public string GetVar(string key)
         {
@@ -211,7 +260,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// è·å–æ’æ§½ä¸ªæ•°
+        /// »ñÈ¡²å²Û¸öÊı
         /// </summary>
         public int GetSlotCount()
         {
@@ -222,14 +271,14 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// ä¸‹è½½æ•°æ®
+        /// ÏÂÔØÊı¾İ
         /// </summary>
         public FastbootResponse DownloadData(byte[] data)
         {
             FastbootResponse response = RawCommand("download:" + data.Length.ToString("x8"));
             if (response.Result == FastbootState.Fail)
                 return response;
-            UsbDevice.Write(data, data.Length);
+            Transport.Write(data, data.Length);
             var res = HandleResponse();
             if (res.Result == FastbootState.Success)
             {
@@ -241,7 +290,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// ä¸‹è½½æ•°æ®
+        /// ÏÂÔØÊı¾İ
         /// </summary>
         public FastbootResponse DownloadData(Stream stream, long length, bool onEvent = true)
         {
@@ -259,10 +308,10 @@ namespace SharpFastboot
                 if (readSize <= 0) break;
 
                 sha256.TransformBlock(buffer, 0, readSize, null, 0);
-                UsbDevice.Write(buffer, readSize);
+                Transport.Write(buffer, readSize);
                 bytesRead += readSize;
                 if (onEvent)
-                    DataTransferProgressChanged?.Invoke(this, (bytesRead, length));
+                    NotifyProgress(bytesRead, length);
             }
             sha256.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
 
@@ -275,11 +324,11 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// æ‰§è¡Œ stage å‘½ä»¤ï¼Œå°†æœ¬åœ°æ•°æ®å‘é€åˆ°è®¾å¤‡å†…å­˜ï¼ˆç”¨äºåç»­ boot æˆ– flash æŒ‡ä»¤ï¼Œè§†è®¾å¤‡è€Œå®šï¼‰
+        /// Ö´ĞĞ stage ÃüÁî£¬½«±¾µØÊı¾İ·¢ËÍµ½Éè±¸ÄÚ´æ£¨ÓÃÓÚºóĞø boot »ò flash Ö¸Áî£¬ÊÓÉè±¸¶ø¶¨£©
         /// </summary>
         public FastbootResponse Stage(byte[] data)
         {
-            CurrentStepChanged?.Invoke(this, "Staging data...");
+            NotifyCurrentStep("Staging data...");
             FastbootResponse downloadRes = DownloadData(data);
             if (downloadRes.Result != FastbootState.Success) return downloadRes;
 
@@ -287,11 +336,11 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// æ‰§è¡Œ stage å‘½ä»¤ï¼Œå°†æœ¬åœ°æ•°æ®å‘é€åˆ°è®¾å¤‡å†…å­˜
+        /// Ö´ĞĞ stage ÃüÁî£¬½«±¾µØÊı¾İ·¢ËÍµ½Éè±¸ÄÚ´æ
         /// </summary>
         public FastbootResponse Stage(Stream stream, long length)
         {
-            CurrentStepChanged?.Invoke(this, "Staging data from stream...");
+            NotifyCurrentStep("Staging data from stream...");
             FastbootResponse downloadRes = DownloadData(stream, length);
             if (downloadRes.Result != FastbootState.Success) return downloadRes;
 
@@ -299,7 +348,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// ä»è®¾å¤‡ä¸Šä¼ æ•°æ® (å¯¹åº”åè®®ä¸­çš„ä¸Šä¼ )
+        /// ´ÓÉè±¸ÉÏ´«Êı¾İ (¶ÔÓ¦Ğ­ÒéÖĞµÄÉÏ´«)
         /// </summary>
         public FastbootResponse UploadData(string command, Stream output)
         {
@@ -312,28 +361,117 @@ namespace SharpFastboot
             while (bytesDownloaded < size)
             {
                 int toRead = (int)Math.Min(OnceSendDataSize, size - bytesDownloaded);
-                byte[] data = UsbDevice.Read(toRead);
+                byte[] data = Transport.Read(toRead);
                 if (data == null || data.Length == 0) throw new Exception("Unexpected EOF from USB.");
                 output.Write(data, 0, data.Length);
                 bytesDownloaded += data.Length;
-                DataTransferProgressChanged?.Invoke(this, (bytesDownloaded, size));
+                NotifyProgress(bytesDownloaded, size);
             }
 
             return HandleResponse();
         }
 
         /// <summary>
-        /// å¿«ç…§æ›´æ–°æ“ä½œ (Virtual A/B)
+        /// ¿ìÕÕ¸üĞÂ²Ù×÷ (Virtual A/B)
         /// </summary>
         public FastbootResponse SnapshotUpdate(string action = "cancel")
         {
             if (action != "cancel" && action != "merge")
                 throw new ArgumentException("SnapshotUpdate action must be 'cancel' or 'merge'");
-            return RawCommand("snapshot-update:" + action);
+            var res = RawCommand("snapshot-update:" + action);
+            if (res.Response.Contains("reboot fastboot", StringComparison.OrdinalIgnoreCase))
+            {
+                NotifyCurrentStep("Device requested reboot to fastbootd to finish snapshot action...");
+                Reboot("fastboot");
+            }
+            return res;
         }
 
         /// <summary>
-        /// æ ¡éªŒ Product Info (android-info.txt)
+        /// Èç¹û´æÔÚ»îÔ¾µÄĞéÄâ A/B ¿ìÕÕ£¬Ôò³¢ÊÔÈ¡ÏûËü
+        /// </summary>
+        public void CancelSnapshotIfNeeded()
+        {
+            try
+            {
+                string status = GetVar("snapshot-update-status");
+                if (!string.IsNullOrEmpty(status) && status != "none")
+                {
+                    SnapshotUpdate("cancel");
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// È·±£Éè±¸´¦ÓÚ fastbootd (userspace) Ä£Ê½£¬Èç¹û²»ÊÇÔò×Ô¶¯ÖØÆô
+        /// </summary>
+        public void EnsureUserspace()
+        {
+            if (!IsUserspace())
+            {
+                NotifyCurrentStep("Operation requires fastbootd, rebooting...");
+                Reboot("fastboot").ThrowIfError();
+                
+                System.Threading.Thread.Sleep(2000);
+
+                if (Transport is UsbDevice usbDev)
+                {
+                    var newUtil = WaitForDevice(UsbManager.GetAllDevices, usbDev.SerialNumber, 30);
+                    if (newUtil == null) throw new Exception("Failed to reconnect to device after rebooting to fastbootd.");
+                    
+                    this.Transport = newUtil.Transport;
+                }
+                else if (Transport is TcpTransport tcp)
+                {
+                    string host = tcp.Host;
+                    int port = tcp.Port;
+                    tcp.Dispose();
+
+                    DateTime start = DateTime.Now;
+                    bool connected = false;
+                    while ((DateTime.Now - start).TotalSeconds < 60)
+                    {
+                        try 
+                        {
+                            Transport = new TcpTransport(host, port);
+                            connected = true;
+                            break;
+                        }
+                        catch { System.Threading.Thread.Sleep(1000); }
+                    }
+                    if (!connected) throw new Exception("Failed to reconnect to TCP device after rebooting to fastbootd.");
+                }
+                else if (Transport is UdpTransport udp)
+                {
+                    string host = udp.Host;
+                    int port = udp.Port;
+                    udp.Dispose();
+
+                    DateTime start = DateTime.Now;
+                    bool connected = false;
+                    while ((DateTime.Now - start).TotalSeconds < 60)
+                    {
+                        try 
+                        {
+                            Transport = new UdpTransport(host, port);
+                            connected = true;
+                            break;
+                        }
+                        catch { System.Threading.Thread.Sleep(1000); }
+                    }
+                    if (!connected) throw new Exception("Failed to reconnect to UDP device after rebooting to fastbootd.");
+                }
+                else
+                {
+                    throw new NotSupportedException("Automatic reboot to userspace is only supported for USB, TCP and UDP transports.");
+                }
+                _varCache.Clear();
+            }
+        }
+
+        /// <summary>
+        /// Ğ£Ñé Product Info (android-info.txt)
         /// </summary>
         public bool ValidateProductInfo(string content, out string? error)
         {
@@ -342,7 +480,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// ä»åˆ†åŒºå›è¯»å¹¶æŠ“å–æ•°æ® (fetch)
+        /// ´Ó·ÖÇø»Ø¶Á²¢×¥È¡Êı¾İ (fetch)
         /// </summary>
         public FastbootResponse Fetch(string partition, string outputPath, long offset = 0, long size = -1)
         {
@@ -367,7 +505,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// æ‰§è¡Œ legacy upload æŒ‡ä»¤ï¼Œå›ä¼ è®¾å¤‡é•œåƒæˆ–æ—¥å¿— (å¦‚ upload:last_kmsg)
+        /// Ö´ĞĞ legacy upload Ö¸Áî£¬»Ø´«Éè±¸¾µÏñ»òÈÕÖ¾ (Èç upload:last_kmsg)
         /// </summary>
         public FastbootResponse Upload(string filename, string outputPath)
         {
@@ -376,7 +514,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// ä¸‹è½½å¹¶æŠ“å–å·²åˆ†é˜¶æ®µçš„æ•°æ® (staged data)
+        /// ÏÂÔØ²¢×¥È¡ÒÑ·Ö½×¶ÎµÄÊı¾İ (staged data)
         /// </summary>
         public void GetStaged(string outputPath)
         {
@@ -385,99 +523,96 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// æ‰“å°æ ‡å‡†è®¾å¤‡ä¿¡æ¯ï¼ˆbootloaderç‰ˆæœ¬ã€åŸºå¸¦ç‰ˆæœ¬ã€åºåˆ—å·ç­‰ï¼‰
+        /// ´òÓ¡±ê×¼Éè±¸ĞÅÏ¢£¨bootloader°æ±¾¡¢»ù´ø°æ±¾¡¢ĞòÁĞºÅµÈ£©
         /// </summary>
         public void DumpInfo()
         {
-            CurrentStepChanged?.Invoke(this, "--------------------------------------------");
-            try { CurrentStepChanged?.Invoke(this, "Bootloader Version...: " + GetVar("version-bootloader")); } catch { }
-            try { CurrentStepChanged?.Invoke(this, "Baseband Version.....: " + GetVar("version-baseband")); } catch { }
-            try { CurrentStepChanged?.Invoke(this, "Serial Number........: " + GetVar("serialno")); } catch { }
-            CurrentStepChanged?.Invoke(this, "--------------------------------------------");
+            NotifyCurrentStep("--------------------------------------------");
+            try { NotifyCurrentStep("Bootloader Version...: " + GetVar("version-bootloader")); } catch { }
+            try { NotifyCurrentStep("Baseband Version.....: " + GetVar("version-baseband")); } catch { }
+            try { NotifyCurrentStep("Serial Number........: " + GetVar("serialno")); } catch { }
+            NotifyCurrentStep("--------------------------------------------");
         }
 
         /// <summary>
-        /// åˆ·å…¥ ZIP é•œåƒåŒ… (å¯¹åº” fastboot update)
+        /// Ë¢Èë ZIP Ë¢»ú°ü (¶ÔÓ¦ fastboot update)
         /// </summary>
         public void FlashZip(string zipPath, bool skipValidation = false, bool wipe = false)
         {
+            CancelSnapshotIfNeeded();
             DumpInfo();
-            CurrentStepChanged?.Invoke(this, $"Parsing ZIP: {Path.GetFileName(zipPath)}");
-            using var archive = ZipFile.OpenRead(zipPath);
-
-            var infoEntry = archive.GetEntry("android-info.txt") ?? archive.GetEntry("android-product.txt");
-            if (infoEntry != null && !skipValidation)
+            
+            string tempDir = Path.Combine(Path.GetTempPath(), "SharpFastboot_Zip_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            
+            try
             {
-                using var reader = new StreamReader(infoEntry.Open());
-                string content = reader.ReadToEnd();
-                if (!ValidateProductInfo(content, out string? error))
-                {
-                    throw new Exception("Product Info Validation Failed: " + error);
-                }
-                CurrentStepChanged?.Invoke(this, "Product Info validated successfully.");
-            }
+                NotifyCurrentStep($"Extracting ZIP: {Path.GetFileName(zipPath)}");
+                ZipFile.ExtractToDirectory(zipPath, tempDir);
 
-            foreach (var entry in archive.Entries)
+                // ¸´ÓÃ FlashAll Âß¼­£¬Ëü»á×Ô¶¯´¦Àí fastboot-info.txt¡¢ÓÅ»¯ super ·ÖÇøË¢Èë¡¢Ğ£Ñé¼°Çå¿ÕÊı¾İ
+                FlashAll(tempDir, wipe, false, skipValidation);
+            }
+            finally
             {
-                if (!entry.Name.EndsWith(".img", StringComparison.OrdinalIgnoreCase)) continue;
-
-                string part = Path.GetFileNameWithoutExtension(entry.Name);
-                CurrentStepChanged?.Invoke(this, $"Processing {part} from ZIP...");
-                
-                string tempFile = Path.Combine(Path.GetTempPath(), part + "_" + Guid.NewGuid().ToString("N") + ".img");
-                entry.ExtractToFile(tempFile, true);
-                
-                try 
-                {
-                    FlashImage(part, tempFile);
-                    
-                    var sigEntry = archive.GetEntry(part + ".sig");
-                    if (sigEntry != null)
-                    {
-                        using var sigStream = sigEntry.Open();
-                        using var ms = new MemoryStream();
-                        sigStream.CopyTo(ms);
-                        Signature(ms.ToArray());
-                    }
-                }
-                finally
-                {
-                    if (File.Exists(tempFile)) File.Delete(tempFile);
-                }
+                try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
             }
-
-            if (wipe) WipeUserData();
         }
 
         /// <summary>
-        /// åˆ·å…¥éç¨€ç–é•œåƒ(Already Error check)
+        /// Ë¢Èë·ÇÏ¡Êè¾µÏñ(Already Error check)
         /// </summary>
         public FastbootResponse FlashUnsparseImage(string partition, Stream stream, long length)
         {
-            CurrentStepChanged?.Invoke(this, $"Sending {partition}");
+            NotifyCurrentStep($"Sending {partition}");
             DownloadData(stream, length).ThrowIfError();
-            CurrentStepChanged?.Invoke(this, $"Flashing {partition}");
+            NotifyCurrentStep($"Flashing {partition}");
             return RawCommand("flash:" + partition).ThrowIfError();
         }
 
+        public long GetMaxDownloadSize()
+        {
+            var sizeStr = GetVar("max-download-size");
+            if (string.IsNullOrEmpty(sizeStr)) return SparseMaxDownloadSize;
+
+            if (sizeStr.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                if (long.TryParse(sizeStr.Substring(2), System.Globalization.NumberStyles.HexNumber, null, out long res))
+                    return res;
+            }
+            else
+            {
+                if (long.TryParse(sizeStr, out long res))
+                    return res;
+            }
+            return SparseMaxDownloadSize;
+        }
+
         /// <summary>
-        /// åˆ·å…¥ç¨€ç–é•œåƒ(Already Error check)
+        /// Ë¢ÈëÏ¡Êè¾µÏñ(Already Error check)
         /// </summary>
         public FastbootResponse FlashSparseImage(string partition, string filePath)
         {
+            long maxDownloadSize = GetMaxDownloadSize();
+            SparseFile sfile = SparseFile.FromImageFile(filePath);
+            return FlashSparseFile(partition, sfile, maxDownloadSize);
+        }
+
+        /// <summary>
+        /// Ë¢ÈëÏ¡ÊèÎÄ¼ş¶ÔÏó
+        /// </summary>
+        public FastbootResponse FlashSparseFile(string partition, SparseFile sfile, long maxDownloadSize)
+        {
+            bool useCrc = HasCrc();
             int count = 1;
             FastbootResponse response = new FastbootResponse();
-            int max_download_size = SparseMaxDownloadSize;
-            int.TryParse(GetVar("max-download-size").TrimStart("0x"),
-                System.Globalization.NumberStyles.HexNumber, null, out max_download_size);
-            SparseFile sfile = SparseFile.FromImageFile(filePath);
-            var parts = sfile.Resparse(max_download_size);
+            var parts = sfile.Resparse(maxDownloadSize);
             foreach (var item in parts)
             {
-                Stream stream = item.GetExportStream(0, item.Header.TotalBlocks);
-                CurrentStepChanged?.Invoke(this, $"Sending {partition}({count} / {parts.Count})");
+                using Stream stream = item.GetExportStream(0, item.Header.TotalBlocks, useCrc);
+                NotifyCurrentStep($"Sending {partition}({count} / {parts.Count})" + (useCrc ? " (with CRC)" : ""));
                 DownloadData(stream, stream.Length).ThrowIfError();
-                CurrentStepChanged?.Invoke(this, $"Flashing {partition}({count} / {parts.Count})");
+                NotifyCurrentStep($"Flashing {partition}({count} / {parts.Count})");
                 response = RawCommand("flash:" + partition);
                 response.ThrowIfError();
                 count++;
@@ -488,7 +623,15 @@ namespace SharpFastboot
         public string GetCurrentSlot() => GetVar("current-slot");
 
         /// <summary>
-        /// åˆ¤æ–­åˆ†åŒºæ˜¯å¦æ”¯æŒæ’æ§½ï¼ˆå¸¦ç¼“å­˜ï¼‰
+        /// ÊÇ·ñÖ§³Ö CRC Ğ£ÑéÂë (AOSP sparse Ğ­ÒéÀ©Õ¹)
+        /// </summary>
+        public bool HasCrc()
+        {
+            try { return GetVar("has-crc") == "yes"; } catch { return false; }
+        }
+
+        /// <summary>
+        /// ÅĞ¶Ï·ÖÇøÊÇ·ñÖ§³Ö²å²Û£¨´ø»º´æ£©
         /// </summary>
         public bool HasSlot(string partition)
         {
@@ -504,6 +647,19 @@ namespace SharpFastboot
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// ¼ì²é·ÖÇøÊÇ·ñ´æÔÚ
+        /// </summary>
+        public bool PartitionExists(string partition)
+        {
+            try
+            {
+                string res = GetPartitionSize(partition);
+                return !string.IsNullOrEmpty(res) && res != "0" && res != "0x0";
+            }
+            catch { return false; }
         }
 
         public FastbootResponse SetActiveSlot(string slot)
@@ -526,18 +682,33 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// æ™ºèƒ½åˆ·å…¥é•œåƒ (æ ¹æ®é­”æ•°è‡ªåŠ¨åˆ¤æ–­æ˜¯å¦ä¸ºç¨€ç–é•œåƒï¼Œå¹¶è‡ªåŠ¨å¤„ç† A/B æ’æ§½)
+        /// ÖÇÄÜË¢Èë¾µÏñ (¸ù¾İÄ§Êı×Ô¶¯ÅĞ¶ÏÊÇ·ñÎªÏ¡Êè¾µÏñ£¬²¢×Ô¶¯´¦Àí A/B ²å²Û)
         /// </summary>
-        public void FlashImage(string partition, string filePath)
+        public void FlashImage(string partition, string filePath, string? slotOverride = null)
         {
             if (!File.Exists(filePath)) throw new FileNotFoundException(filePath);
 
             string targetPartition = partition;
-            if (HasSlot(partition))
+            if (slotOverride == "all")
             {
-                targetPartition = partition + "_" + GetCurrentSlot();
+                FlashImage(partition, filePath, "a");
+                FlashImage(partition, filePath, "b");
+                return;
             }
 
+            if (HasSlot(partition))
+            {
+                targetPartition = partition + "_" + (slotOverride ?? GetCurrentSlot());
+            }
+
+            // AOSP Optimal Placement: For logical partitions, zero out existing size
+            // ResizeLogicalPartition also handles ensuring userspace (fastbootd)
+            if (IsLogicalOptimized(targetPartition))
+            {
+                try { ResizeLogicalPartition(targetPartition, 0); } catch { }
+            }
+
+            long maxDownloadSize = GetMaxDownloadSize();
             try
             {
                 var header = SparseFile.PeekHeader(filePath);
@@ -547,19 +718,60 @@ namespace SharpFastboot
                 }
                 else
                 {
+                    FileInfo fi = new FileInfo(filePath);
+                    if (fi.Length > maxDownloadSize)
+                    {
+                        // Ô­Ê¼¾µÏñ¹ı´ó£¬×Ô¶¯·â×°ÎªÏ¡Êè¾µÏñ·Ö¶ÎË¢Èë
+                        FlashSparseFile(targetPartition, SparseFile.FromRawFile(filePath), maxDownloadSize);
+                    }
+                    else
+                    {
+                        using var fs = File.OpenRead(filePath);
+                        FlashUnsparseImage(targetPartition, fs, fs.Length);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                FileInfo fi = new FileInfo(filePath);
+                if (fi.Length > maxDownloadSize)
+                {
+                    FlashSparseFile(targetPartition, SparseFile.FromRawFile(filePath), maxDownloadSize);
+                }
+                else
+                {
                     using var fs = File.OpenRead(filePath);
                     FlashUnsparseImage(targetPartition, fs, fs.Length);
                 }
             }
-            catch
+        }
+
+        public FastbootResponse GsiWipe() => GsiCommand("wipe");
+        public FastbootResponse GsiDisable() => GsiCommand("disable");
+        public FastbootResponse GsiStatus() => GsiCommand("status");
+
+        /// <summary>
+        /// µÈ´ıĞéÄâ A/B ºÏ³ÉÍê³É (¶ÔÓ¦ snapshot-update merge --wait)
+        /// </summary>
+        public void WaitForSnapshotMerge(int timeoutSeconds = 600)
+        {
+            DateTime start = DateTime.Now;
+            while ((DateTime.Now - start).TotalSeconds < timeoutSeconds)
             {
-                using var fs = File.OpenRead(filePath);
-                FlashUnsparseImage(targetPartition, fs, fs.Length);
+                var res = GetVar("snapshot-update-status");
+                if (res == "merging")
+                {
+                    NotifyCurrentStep("Waiting for snapshot merge...");
+                    System.Threading.Thread.Sleep(2000);
+                    continue;
+                }
+                if (res == "none" || res == "completed") return;
+                break;
             }
         }
 
         /// <summary>
-        /// ä»æµåˆ·å…¥é•œåƒ
+        /// ´ÓÁ÷Ë¢Èë¾µÏñ
         /// </summary>
         public void FlashImage(string partition, Stream stream)
         {
@@ -567,6 +779,13 @@ namespace SharpFastboot
             if (HasSlot(partition))
             {
                 targetPartition = partition + "_" + GetCurrentSlot();
+            }
+
+            // AOSP Optimal Placement: For logical partitions, zero out existing size
+            // ResizeLogicalPartition also handles ensuring userspace (fastbootd)
+            if (IsLogicalOptimized(targetPartition))
+            {
+                try { ResizeLogicalPartition(targetPartition, 0); } catch { }
             }
 
             long oldPos = -1;
@@ -582,16 +801,10 @@ namespace SharpFastboot
                 var header = SparseHeader.FromBytes(headerBytes);
                 if (header.Magic == SparseFormat.SparseHeaderMagic)
                 {
-                    string tmp = Path.GetTempFileName();
-                    try
-                    {
-                        using (var fs = File.Create(tmp)) stream.CopyTo(fs);
-                        FlashSparseImage(targetPartition, tmp);
-                    }
-                    finally
-                    {
-                        if (File.Exists(tmp)) File.Delete(tmp);
-                    }
+                    // Streaming optimization: Use SparseFile directly from stream
+                    using var sfile = SparseFile.FromStream(stream);
+                    FlashSparseFile(targetPartition, sfile, GetMaxDownloadSize());
+                    return;
                 }
                 else
                 {
@@ -606,12 +819,12 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// æ‰§è¡Œ OEM å‘½ä»¤
+        /// Ö´ĞĞ OEM ÃüÁî
         /// </summary>
         public FastbootResponse OemCommand(string oemCmd) => RawCommand("oem " + oemCmd);
 
         /// <summary>
-        /// æ‰§è¡Œ Flashing å­å‘½ä»¤ (ç°ä»£è§£é”å‘½ä»¤)
+        /// Ö´ĞĞ Flashing ×ÓÃüÁî (ÏÖ´ú½âËøÃüÁî)
         /// </summary>
         public FastbootResponse FlashingCommand(string subCmd) => RawCommand("flashing " + subCmd);
 
@@ -626,17 +839,17 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// ç»§ç»­å¯åŠ¨è¿‡ç¨‹
+        /// ¼ÌĞøÆô¶¯¹ı³Ì
         /// </summary>
         public FastbootResponse Continue() => RawCommand("continue");
 
         /// <summary>
-        /// æ ¼å¼åŒ–åˆ†åŒº
+        /// ¸ñÊ½»¯·ÖÇø
         /// </summary>
         public FastbootResponse FormatPartition(string partition) => RawCommand("format:" + partition);
 
         /// <summary>
-        /// åˆ¤æ–­åˆ†åŒºæ˜¯å¦ä¸ºé€»è¾‘åˆ†åŒº
+        /// ÅĞ¶Ï·ÖÇøÊÇ·ñÎªÂß¼­·ÖÇø
         /// </summary>
         public bool IsLogical(string partition)
         {
@@ -644,7 +857,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// è·å–åˆ†åŒºçš„å­˜å‚¨ç©ºé—´å¤§å°
+        /// »ñÈ¡·ÖÇøµÄ´æ´¢¿Õ¼ä´óĞ¡
         /// </summary>
         public string GetPartitionSize(string partition)
         {
@@ -652,7 +865,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// è·å–åˆ†åŒºçš„å­˜å‚¨ç³»ç»Ÿç±»å‹
+        /// »ñÈ¡·ÖÇøµÄ´æ´¢ÏµÍ³ÀàĞÍ
         /// </summary>
         public string GetPartitionType(string partition)
         {
@@ -660,7 +873,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// æœ¬åœ°æ„å»ºæ–‡ä»¶ç³»ç»Ÿé•œåƒå¹¶åˆ·å…¥ï¼ˆæ¨¡æ‹Ÿ fastboot format å‘½ä»¤ï¼‰
+        /// ±¾µØ¹¹½¨ÎÄ¼şÏµÍ³¾µÏñ²¢Ë¢Èë£¨Ä£Äâ fastboot format ÃüÁî£©
         /// </summary>
         public void FormatPartitionLocal(string partition, string fsType = "ext4", long size = 0)
         {
@@ -693,25 +906,34 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// åˆ›å»ºé€»è¾‘åˆ†åŒº
+        /// ´´½¨Âß¼­·ÖÇø
         /// </summary>
         public FastbootResponse CreateLogicalPartition(string partition, long size)
-            => RawCommand($"create-logical-partition:{partition}:{size}");
+        {
+            EnsureUserspace();
+            return RawCommand($"create-logical-partition:{partition}:{size}");
+        }
 
         /// <summary>
-        /// åˆ é™¤é€»è¾‘åˆ†åŒº
+        /// É¾³ıÂß¼­·ÖÇø
         /// </summary>
         public FastbootResponse DeleteLogicalPartition(string partition)
-            => RawCommand($"delete-logical-partition:{partition}");
+        {
+            EnsureUserspace();
+            return RawCommand($"delete-logical-partition:{partition}");
+        }
 
         /// <summary>
-        /// è°ƒæ•´é€»è¾‘åˆ†åŒºå¤§å°
+        /// µ÷ÕûÂß¼­·ÖÇø´óĞ¡
         /// </summary>
         public FastbootResponse ResizeLogicalPartition(string partition, long size)
-            => RawCommand($"resize-logical-partition:{partition}:{size}");
+        {
+            EnsureUserspace();
+            return RawCommand($"resize-logical-partition:{partition}:{size}");
+        }
 
         /// <summary>
-        /// å‘é€å¹¶å¼•å¯¼å†…æ ¸ (ä¸å†™å…¥ Flash)
+        /// ·¢ËÍ²¢Òıµ¼ÄÚºË (²»Ğ´Èë Flash)
         /// </summary>
         public FastbootResponse Boot(byte[] data)
         {
@@ -720,7 +942,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// å‘é€å¹¶åœ¨å†…å­˜ä¸­å¼•å¯¼å†…æ ¸é•œåƒæ–‡ä»¶
+        /// ·¢ËÍ²¢ÔÚÄÚ´æÖĞÒıµ¼ÄÚºË¾µÏñÎÄ¼ş
         /// </summary>
         public FastbootResponse Boot(string filePath)
         {
@@ -730,40 +952,51 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// æ··åˆæ‰“åŒ…å¹¶å¼•å¯¼å†…æ ¸ (V0)
+        /// »ìºÏ´ò°ü²¢Òıµ¼ÄÚºË
         /// </summary>
-        public FastbootResponse Boot(string kernelPath, string? ramdiskPath = null, string? secondPath = null, string? cmdline = null, uint base_addr = 0x10000000, uint page_size = 2048)
+        public FastbootResponse Boot(string kernelPath, string? ramdiskPath = null, string? secondPath = null, string? dtbPath = null, string? cmdline = null, uint header_version = 0, uint base_addr = 0x10000000, uint page_size = 2048)
         {
             byte[] kernel = File.ReadAllBytes(kernelPath);
             byte[]? ramdisk = ramdiskPath != null ? File.ReadAllBytes(ramdiskPath) : null;
             byte[]? second = secondPath != null ? File.ReadAllBytes(secondPath) : null;
-            byte[] bootImg = CreateBootImage(kernel, ramdisk, second, cmdline, null, base_addr, page_size);
+            byte[]? dtb = dtbPath != null ? File.ReadAllBytes(dtbPath) : null;
+            
+            byte[] bootImg = CreateBootImageVersioned(kernel, ramdisk, second, dtb, cmdline, null, header_version, base_addr, page_size);
             return Boot(bootImg);
         }
 
         /// <summary>
-        /// åˆ·å…¥ç”± kernel å’Œ ramdisk æ··åˆç”Ÿæˆçš„åŸå§‹é•œåƒ
+        /// Ë¢ÈëÓÉ¸÷×é¼ş»ìºÏÉú³ÉµÄÔ­Ê¼¾µÏñ (¶ÔÓ¦ AOSP flash:raw)
         /// </summary>
-        public FastbootResponse FlashRaw(string partition, byte[] kernel, byte[]? ramdisk = null, byte[]? second = null, string? cmdline = null, string? name = null, uint base_addr = 0x10000000, uint page_size = 2048)
-        {
-            byte[] bootImg = CreateBootImage(kernel, ramdisk, second, cmdline, name, base_addr, page_size);
-            DownloadData(bootImg).ThrowIfError();
-            return RawCommand("flash:" + partition);
-        }
-
-        /// <summary>
-        /// ä»æ–‡ä»¶æ··åˆç”Ÿæˆå¹¶åˆ·å…¥åŸå§‹é•œåƒ
-        /// </summary>
-        public FastbootResponse FlashRaw(string partition, string kernelPath, string? ramdiskPath = null, string? secondPath = null, string? cmdline = null, string? name = null, uint base_addr = 0x10000000, uint page_size = 2048)
+        public FastbootResponse FlashRaw(string partition, string kernelPath, string? ramdiskPath = null, string? secondPath = null, string? dtbPath = null, string? cmdline = null, uint header_version = 0, uint base_addr = 0x10000000, uint page_size = 2048)
         {
             byte[] kernel = File.ReadAllBytes(kernelPath);
             byte[]? ramdisk = ramdiskPath != null ? File.ReadAllBytes(ramdiskPath) : null;
             byte[]? second = secondPath != null ? File.ReadAllBytes(secondPath) : null;
-            return FlashRaw(partition, kernel, ramdisk, second, cmdline, name, base_addr, page_size);
+            byte[]? dtb = dtbPath != null ? File.ReadAllBytes(dtbPath) : null;
+
+            byte[] bootImg = CreateBootImageVersioned(kernel, ramdisk, second, dtb, cmdline, null, header_version, base_addr, page_size);
+            DownloadData(bootImg).ThrowIfError();
+            return RawCommand("flash:" + partition);
+        }
+
+        private byte[] CreateBootImageVersioned(byte[] kernel, byte[]? ramdisk, byte[]? second, byte[]? dtb, string? cmdline, string? name, uint version, uint base_addr, uint page_size)
+        {
+            switch (version)
+            {
+                case 0: return CreateBootImage(kernel, ramdisk, second, cmdline, name, base_addr, page_size);
+                case 1: return CreateBootImage1(kernel, ramdisk, second, cmdline, name, base_addr, page_size);
+                case 2: return CreateBootImage2(kernel, ramdisk, second, dtb, cmdline, name, base_addr, page_size);
+                case 3: return CreateBootImage3(kernel, ramdisk, cmdline, 0); // OS version 0 as default
+                case 4: return CreateBootImage4(kernel, ramdisk, cmdline, 0);
+                case 5: return CreateBootImage5(kernel, ramdisk, cmdline, 0);
+                case 6: return CreateBootImage6(kernel, ramdisk, cmdline, 0);
+                default: throw new NotSupportedException($"Boot image header version {version} is not supported for dynamic packaging.");
+            }
         }
 
         /// <summary>
-        /// ç”Ÿæˆ BootImage æ•°æ® (V0 ç»“æ„)
+        /// Éú³É BootImage Êı¾İ (V0 ½á¹¹)
         /// </summary>
         public byte[] CreateBootImage(byte[] kernel, byte[]? ramdisk, byte[]? second, string? cmdline, string? name, uint base_addr, uint page_size)
         {
@@ -814,7 +1047,52 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// ç”Ÿæˆ BootImage V2 æ•°æ® (å« DTB)
+        /// Éú³É BootImage V1 Êı¾İ (º¬ Header Size)
+        /// </summary>
+        public byte[] CreateBootImage1(byte[] kernel, byte[]? ramdisk, byte[]? second, string? cmdline, string? name, uint base_addr, uint page_size)
+        {
+            BootImageHeaderV1 header = BootImageHeaderV1.Create();
+            header.KernelSize = (uint)kernel.Length;
+            header.KernelAddr = base_addr + 0x00008000;
+            header.RamdiskSize = (uint)(ramdisk?.Length ?? 0);
+            header.RamdiskAddr = base_addr + 0x01000000;
+            header.SecondSize = (uint)(second?.Length ?? 0);
+            header.SecondAddr = base_addr + 0x00F00000;
+            header.TagsAddr = base_addr + 0x00000100;
+            header.PageSize = page_size;
+            header.HeaderSize = (uint)Marshal.SizeOf<BootImageHeaderV1>();
+
+            if (!string.IsNullOrEmpty(cmdline))
+            {
+                byte[] cmdBytes = Encoding.ASCII.GetBytes(cmdline);
+                Array.Copy(cmdBytes, header.Cmdline, Math.Min(cmdBytes.Length, 512));
+            }
+
+            if (!string.IsNullOrEmpty(name))
+            {
+                byte[] nameBytes = Encoding.ASCII.GetBytes(name);
+                Array.Copy(nameBytes, header.Name, Math.Min(nameBytes.Length, 16));
+            }
+
+            int headerPages = ((int)header.HeaderSize + (int)page_size - 1) / (int)page_size;
+            int kernelPages = (kernel.Length + (int)page_size - 1) / (int)page_size;
+            int ramdiskPages = ((ramdisk?.Length ?? 0) + (int)page_size - 1) / (int)page_size;
+            int secondPages = ((second?.Length ?? 0) + (int)page_size - 1) / (int)page_size;
+
+            int totalSize = (headerPages + kernelPages + ramdiskPages + secondPages) * (int)page_size;
+            byte[] buffer = new byte[totalSize];
+
+            byte[] headerBytes = DataHelper.Struct2Bytes(header);
+            Array.Copy(headerBytes, 0, buffer, 0, headerBytes.Length);
+            Array.Copy(kernel, 0, buffer, headerPages * page_size, kernel.Length);
+            if (ramdisk != null) Array.Copy(ramdisk, 0, buffer, (headerPages + kernelPages) * page_size, ramdisk.Length);
+            if (second != null) Array.Copy(second, 0, buffer, (headerPages + kernelPages + ramdiskPages) * page_size, second.Length);
+
+            return buffer;
+        }
+
+        /// <summary>
+        /// Éú³É BootImage V2 Êı¾İ (º¬ DTB)
         /// </summary>
         public byte[] CreateBootImage2(byte[] kernel, byte[]? ramdisk, byte[]? second, byte[]? dtb, string? cmdline, string? name, uint base_addr, uint page_size)
         {
@@ -863,7 +1141,7 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// ç”Ÿæˆ BootImage V3 æ•°æ®
+        /// Éú³É BootImage V3 Êı¾İ
         /// </summary>
         public byte[] CreateBootImage3(byte[] kernel, byte[]? ramdisk, string? cmdline, uint os_version)
         {
@@ -898,9 +1176,9 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// ç”Ÿæˆ BootImage V4 æ•°æ® (ä¸å«ç­¾åéƒ¨åˆ†)
+        /// Éú³É BootImage V4 Êı¾İ (º¬Ç©Ãû²¿·Ö)
         /// </summary>
-        public byte[] CreateBootImage4(byte[] kernel, byte[]? ramdisk, string? cmdline, uint os_version)
+        public byte[] CreateBootImage4(byte[] kernel, byte[]? ramdisk, string? cmdline, uint os_version, byte[]? signature = null)
         {
             BootImageHeaderV4 header = BootImageHeaderV4.Create();
             header.KernelSize = (uint)kernel.Length;
@@ -908,6 +1186,7 @@ namespace SharpFastboot
             header.OsVersion = os_version;
             header.HeaderSize = 4096;
             header.HeaderVersion = 4;
+            header.SignatureSize = (uint)(signature?.Length ?? 0);
 
             if (!string.IsNullOrEmpty(cmdline))
             {
@@ -919,8 +1198,9 @@ namespace SharpFastboot
             int headerPages = (int)(header.HeaderSize + page_size - 1) / page_size;
             int kernelPages = (kernel.Length + page_size - 1) / page_size;
             int ramdiskPages = ((ramdisk?.Length ?? 0) + page_size - 1) / page_size;
+            int sigPages = (int)((header.SignatureSize + page_size - 1) / page_size);
 
-            int totalSize = (headerPages + kernelPages + ramdiskPages) * page_size;
+            int totalSize = (headerPages + kernelPages + ramdiskPages + sigPages) * page_size;
             byte[] buffer = new byte[totalSize];
 
             byte[] headerBytes = DataHelper.Struct2Bytes(header);
@@ -928,12 +1208,188 @@ namespace SharpFastboot
             Array.Copy(kernel, 0, buffer, headerPages * page_size, kernel.Length);
             if (ramdisk != null)
                 Array.Copy(ramdisk, 0, buffer, (headerPages + kernelPages) * page_size, ramdisk.Length);
+            if (signature != null)
+                Array.Copy(signature, 0, buffer, (headerPages + kernelPages + ramdiskPages) * page_size, signature.Length);
 
             return buffer;
         }
 
         /// <summary>
-        /// å‘é€ç­¾åæ–‡ä»¶
+        /// Éú³É BootImage V5 Êı¾İ (º¬ Vendor Bootconfig)
+        /// </summary>
+        public byte[] CreateBootImage5(byte[] kernel, byte[]? ramdisk, string? cmdline, uint os_version, byte[]? signature = null, byte[]? bootconfig = null)
+        {
+            BootImageHeaderV5 header = BootImageHeaderV5.Create();
+            header.KernelSize = (uint)kernel.Length;
+            header.RamdiskSize = (uint)(ramdisk?.Length ?? 0);
+            header.OsVersion = os_version;
+            header.HeaderSize = 4096;
+            header.HeaderVersion = 5;
+            header.SignatureSize = (uint)(signature?.Length ?? 0);
+            header.VendorBootconfigSize = (uint)(bootconfig?.Length ?? 0);
+
+            if (!string.IsNullOrEmpty(cmdline))
+            {
+                byte[] cmdBytes = Encoding.ASCII.GetBytes(cmdline);
+                Array.Copy(cmdBytes, header.Cmdline, Math.Min(cmdBytes.Length, 1536));
+            }
+
+            const int page_size = 4096;
+            int headerPages = (int)(header.HeaderSize + page_size - 1) / page_size;
+            int kernelPages = (kernel.Length + page_size - 1) / page_size;
+            int ramdiskPages = ((ramdisk?.Length ?? 0) + page_size - 1) / page_size;
+            int sigPages = (int)((header.SignatureSize + page_size - 1) / page_size);
+            int configPages = (int)((header.VendorBootconfigSize + page_size - 1) / page_size);
+
+            int totalSize = (headerPages + kernelPages + ramdiskPages + sigPages + configPages) * page_size;
+            byte[] buffer = new byte[totalSize];
+
+            byte[] headerBytes = DataHelper.Struct2Bytes(header);
+            Array.Copy(headerBytes, 0, buffer, 0, headerBytes.Length);
+            Array.Copy(kernel, 0, buffer, headerPages * page_size, kernel.Length);
+            if (ramdisk != null)
+                Array.Copy(ramdisk, 0, buffer, (headerPages + kernelPages) * page_size, ramdisk.Length);
+            if (signature != null)
+                Array.Copy(signature, 0, buffer, (headerPages + kernelPages + ramdiskPages) * page_size, signature.Length);
+            if (bootconfig != null)
+                Array.Copy(bootconfig, 0, buffer, (headerPages + kernelPages + ramdiskPages + sigPages) * page_size, bootconfig.Length);
+
+            return buffer;
+        }
+
+        /// <summary>
+        /// Éú³É BootImage V6 Êı¾İ (º¬À©Õ¹±£ÁôÇø)
+        /// </summary>
+        public byte[] CreateBootImage6(byte[] kernel, byte[]? ramdisk, string? cmdline, uint os_version, byte[]? signature = null, byte[]? bootconfig = null)
+        {
+            BootImageHeaderV6 header = BootImageHeaderV6.Create();
+            header.KernelSize = (uint)kernel.Length;
+            header.RamdiskSize = (uint)(ramdisk?.Length ?? 0);
+            header.OsVersion = os_version;
+            header.HeaderSize = 4096;
+            header.HeaderVersion = 6;
+            header.SignatureSize = (uint)(signature?.Length ?? 0);
+            header.VendorBootconfigSize = (uint)(bootconfig?.Length ?? 0);
+
+            if (!string.IsNullOrEmpty(cmdline))
+            {
+                byte[] cmdBytes = Encoding.ASCII.GetBytes(cmdline);
+                Array.Copy(cmdBytes, header.Cmdline, Math.Min(cmdBytes.Length, 1536));
+            }
+
+            const int page_size = 4096;
+            int headerPages = (int)(header.HeaderSize + page_size - 1) / page_size;
+            int kernelPages = (kernel.Length + page_size - 1) / page_size;
+            int ramdiskPages = ((ramdisk?.Length ?? 0) + page_size - 1) / page_size;
+            int sigPages = (int)((header.SignatureSize + page_size - 1) / page_size);
+            int configPages = (int)((header.VendorBootconfigSize + page_size - 1) / page_size);
+
+            int totalSize = (headerPages + kernelPages + ramdiskPages + sigPages + configPages) * page_size;
+            byte[] buffer = new byte[totalSize];
+
+            byte[] headerBytes = DataHelper.Struct2Bytes(header);
+            Array.Copy(headerBytes, 0, buffer, 0, headerBytes.Length);
+            Array.Copy(kernel, 0, buffer, headerPages * page_size, kernel.Length);
+            if (ramdisk != null)
+                Array.Copy(ramdisk, 0, buffer, (headerPages + kernelPages) * page_size, ramdisk.Length);
+            if (signature != null)
+                Array.Copy(signature, 0, buffer, (headerPages + kernelPages + ramdiskPages) * page_size, signature.Length);
+            if (bootconfig != null)
+                Array.Copy(bootconfig, 0, buffer, (headerPages + kernelPages + ramdiskPages + sigPages) * page_size, bootconfig.Length);
+
+            return buffer;
+        }
+
+        /// <summary>
+        /// Éú³É Vendor Boot Image V3 Êı¾İ (º¬ DTB)
+        /// </summary>
+        public byte[] CreateVendorBootImage3(byte[] ramdisk, byte[] dtb, string? cmdline, string? product_name, uint page_size = 4096, uint base_addr = 0x10000000)
+        {
+            VendorBootImageHeaderV3 header = VendorBootImageHeaderV3.Create();
+            header.PageSize = page_size;
+            header.KernelAddr = base_addr + 0x00008000;
+            header.RamdiskAddr = base_addr + 0x01000000;
+            header.TagsAddr = base_addr + 0x00000100;
+            header.VendorRamdiskSize = (uint)ramdisk.Length;
+            header.DtbSize = (uint)dtb.Length;
+            header.DtbAddr = (ulong)base_addr + 0x01100000;
+            header.HeaderSize = (uint)Marshal.SizeOf<VendorBootImageHeaderV3>();
+
+            if (!string.IsNullOrEmpty(cmdline))
+            {
+                byte[] cmdBytes = Encoding.ASCII.GetBytes(cmdline);
+                Array.Copy(cmdBytes, header.Cmdline, Math.Min(cmdBytes.Length, 2048));
+            }
+
+            if (!string.IsNullOrEmpty(product_name))
+            {
+                byte[] nameBytes = Encoding.ASCII.GetBytes(product_name);
+                Array.Copy(nameBytes, header.Name, Math.Min(nameBytes.Length, 16));
+            }
+
+            int headerPages = (int)(header.HeaderSize + page_size - 1) / (int)page_size;
+            int ramdiskPages = (ramdisk.Length + (int)page_size - 1) / (int)page_size;
+            int dtbPages = (dtb.Length + (int)page_size - 1) / (int)page_size;
+
+            int totalSize = (headerPages + ramdiskPages + dtbPages) * (int)page_size;
+            byte[] buffer = new byte[totalSize];
+
+            byte[] headerBytes = DataHelper.Struct2Bytes(header);
+            Array.Copy(headerBytes, 0, buffer, 0, headerBytes.Length);
+            Array.Copy(ramdisk, 0, buffer, headerPages * page_size, ramdisk.Length);
+            Array.Copy(dtb, 0, buffer, (headerPages + ramdiskPages) * page_size, dtb.Length);
+
+            return buffer;
+        }
+
+        /// <summary>
+        /// Éú³É Vendor Boot Image V4 Êı¾İ (º¬ Bootconfig)
+        /// </summary>
+        public byte[] CreateVendorBootImage4(byte[] ramdisk, byte[] dtb, string? cmdline, string? product_name, byte[]? bootconfig = null, uint page_size = 4096, uint base_addr = 0x10000000)
+        {
+            VendorBootImageHeaderV4 header = VendorBootImageHeaderV4.Create();
+            header.PageSize = page_size;
+            header.KernelAddr = base_addr + 0x00008000;
+            header.RamdiskAddr = base_addr + 0x01000000;
+            header.TagsAddr = base_addr + 0x00000100;
+            header.VendorRamdiskSize = (uint)ramdisk.Length;
+            header.DtbSize = (uint)dtb.Length;
+            header.DtbAddr = (ulong)base_addr + 0x01100000;
+            header.HeaderSize = (uint)Marshal.SizeOf<VendorBootImageHeaderV4>();
+            header.BootconfigSize = (uint)(bootconfig?.Length ?? 0);
+
+            if (!string.IsNullOrEmpty(cmdline))
+            {
+                byte[] cmdBytes = Encoding.ASCII.GetBytes(cmdline);
+                Array.Copy(cmdBytes, header.Cmdline, Math.Min(cmdBytes.Length, 2048));
+            }
+
+            if (!string.IsNullOrEmpty(product_name))
+            {
+                byte[] nameBytes = Encoding.ASCII.GetBytes(product_name);
+                Array.Copy(nameBytes, header.Name, Math.Min(nameBytes.Length, 16));
+            }
+
+            int headerPages = (int)(header.HeaderSize + page_size - 1) / (int)page_size;
+            int ramdiskPages = (ramdisk.Length + (int)page_size - 1) / (int)page_size;
+            int dtbPages = (dtb.Length + (int)page_size - 1) / (int)page_size;
+            int configPages = (int)((header.BootconfigSize + page_size - 1) / (int)page_size);
+
+            int totalSize = (headerPages + ramdiskPages + dtbPages + configPages) * (int)page_size;
+            byte[] buffer = new byte[totalSize];
+
+            byte[] headerBytes = DataHelper.Struct2Bytes(header);
+            Array.Copy(headerBytes, 0, buffer, 0, headerBytes.Length);
+            Array.Copy(ramdisk, 0, buffer, headerPages * page_size, ramdisk.Length);
+            Array.Copy(dtb, 0, buffer, (headerPages + ramdiskPages) * page_size, dtb.Length);
+            if (bootconfig != null)
+                Array.Copy(bootconfig, 0, buffer, (headerPages + ramdiskPages + dtbPages) * page_size, bootconfig.Length);
+
+            return buffer;
+        }
+
+        /// <summary>
+        /// ·¢ËÍÇ©ÃûÎÄ¼ş
         /// </summary>
         public FastbootResponse Signature(byte[] sigData)
         {
@@ -942,45 +1398,375 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// æ ¡éªŒ android-info.txt ä¸­çš„éœ€æ±‚
+        /// Ğ£Ñé android-info.txt ÖĞµÄÒªÇó
         /// </summary>
-        public bool VerifyRequirements(string infoText)
+        public bool VerifyRequirements(string infoText, bool force = false)
         {
             var parser = new ProductInfoParser(this);
             if (!parser.Validate(infoText, out string? error))
             {
+                if (force)
+                {
+                    NotifyCurrentStep("WARNING: Requirements not met (ignored): " + error);
+                    return true;
+                }
                 throw new Exception(error);
             }
             return true;
         }
 
         /// <summary>
-        /// æ‰§è¡Œ FlashAll (åœ¨æŒ‡å®šç›®å½•ä¸‹å¯»æ‰¾å¹¶åˆ·å…¥åŸºç¡€åˆ†åŒº)
+        /// Ë¢Èë VBMeta ¾µÏñ²¢¿ÉÑ¡½ûÓÃĞ£Ñé (¶ÔÓ¦ --disable-verity / --disable-verification)
         /// </summary>
-        public void FlashAll(string productOutDir, bool wipe = false)
+        public FastbootResponse FlashVbmeta(string partition, string filePath, bool disableVerity = false, bool disableVerification = false)
         {
-            string infoPath = Path.Combine(productOutDir, "android-info.txt");
-            if (File.Exists(infoPath))
+            if (!File.Exists(filePath)) throw new FileNotFoundException(filePath);
+            byte[] data = File.ReadAllBytes(filePath);
+
+            if (data.Length < Marshal.SizeOf<VbmetaHeader>())
+                throw new Exception("vbmeta image too small");
+
+            if (data.Length >= 64)
             {
-                VerifyRequirements(File.ReadAllText(infoPath));
+                byte[] footerBytes = new byte[64];
+                Array.Copy(data, data.Length - 64, footerBytes, 0, 64);
+                try {
+                    var footer = AvbFooter.FromBytes(footerBytes);
+                    if (footer.IsValid()) {
+                        NotifyCurrentStep($"AVB Footer detected (Vbmeta origin size: {footer.OriginalImageSize}, Vbmeta size: {footer.VbmetaSize})");
+                    }
+                } catch { }
             }
 
-            var imageFiles = Directory.GetFiles(productOutDir, "*.img")
-                .OrderBy(f => {
-                    string part = Path.GetFileNameWithoutExtension(f);
-                    int index = Array.IndexOf(PartitionPriority, part.ToLower());
-                    return index == -1 ? int.MaxValue : index;
-                }).ToList();
-
-            foreach (var filePath in imageFiles)
+            if (disableVerity || disableVerification)
             {
-                string part = Path.GetFileNameWithoutExtension(filePath);
-                FlashImage(part, filePath);
+                var header = VbmetaHeader.FromBytes(data);
+                if (header.Magic[0] == (byte)'A' && header.Magic[1] == (byte)'V' && header.Magic[2] == (byte)'B' && header.Magic[3] == (byte)'0')
+                {
+                    if (disableVerity) header.Flags |= VbmetaFlags.AVB_VBMETA_IMAGE_FLAGS_HASHTREE_DISABLED;
+                    if (disableVerification) header.Flags |= VbmetaFlags.AVB_VBMETA_IMAGE_FLAGS_VERIFICATION_DISABLED;
 
-                string sigPath = Path.Combine(productOutDir, part + ".sig");
+                    byte[] headerBytes = DataHelper.Struct2Bytes(header);
+                    Array.Copy(headerBytes, 0, data, 0, headerBytes.Length);
+                    NotifyCurrentStep($"Modified VBMeta flags: verity={disableVerity}, verification={disableVerification}");
+                }
+            }
+
+            return FlashUnsparseImage(partition, new MemoryStream(data), data.Length);
+        }
+
+        /// <summary>
+        /// ¸üĞÂ Super ·ÖÇøÔªÊı¾İ (¶ÔÓ¦ update-super)
+        /// </summary>
+        public FastbootResponse UpdateSuper(string partition, string metadataPath)
+        {
+            if (!File.Exists(metadataPath)) throw new FileNotFoundException(metadataPath);
+            
+            // Èç¹ûÊÇ super_empty.img£¬ÎÒÃÇĞèÒªÌáÈ¡ÔªÊı¾İ²¿·Ö·¢ËÍ¸øÉè±¸
+            LpMetadata metadata = MetadataReader.ReadFromImageFile(metadataPath);
+            byte[] metadataBlob = MetadataWriter.SerializeMetadata(metadata);
+            
+            NotifyCurrentStep($"Updating super metadata for {partition}");
+            DownloadData(metadataBlob).ThrowIfError();
+            return RawCommand("update-super:" + partition);
+        }
+
+        /// <summary>
+        /// Çå³ı Super ·ÖÇøÔªÊı¾İ
+        /// </summary>
+        public FastbootResponse WipeSuper(string partition) => RawCommand("wipe-super:" + partition);
+
+        /// <summary>
+        /// »ùÓÚ fastboot-info.txt Ö´ĞĞË¢»ú²Ù×÷
+        /// </summary>
+        public void FlashFromInfo(string infoContent, string imageDir, bool wipe = false, string? slotOverride = null, bool optimizeSuper = true)
+        {
+            NotifyCurrentStep("Parsing fastboot-info.txt...");
+            var lines = infoContent.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            string currentSlot = slotOverride ?? GetCurrentSlot();
+            string otherSlot = currentSlot == "a" ? "b" : "a";
+
+            // Ô¤¼ÓÔØ¶¯Ì¬·ÖÇøÔªÊı¾İÒÔÓÅ»¯ IsLogical ËÙ¶È
+            LoadLogicalPartitionsFromMetadata(Path.Combine(imageDir, "super_empty.img"));
+
+            var commands = new List<List<string>>();
+
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#")) continue;
+
+                var parts = trimmed.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+                if (parts.Count == 0) continue;
+
+                if (parts[0] == "if-wipe")
+                {
+                    if (!wipe) continue;
+                    parts.RemoveAt(0);
+                }
+                if (parts.Count > 0) commands.Add(parts);
+            }
+
+            // AOSP Optimization: If we find logical partitions to flash, resize them all to 0 first 
+            // to ensure optimal placement in the super partition (when not using optimized super flash).
+            if (IsUserspace())
+            {
+                 foreach (var cmdParts in commands)
+                 {
+                     if (cmdParts[0] == "flash")
+                     {
+                         // Find partition name in arguments
+                         string? part = GetPartitionFromArgs(cmdParts.GetRange(1, cmdParts.Count - 1));
+                         if (part != null && IsLogicalOptimized(part))
+                         {
+                             try { ResizeLogicalPartition(part, 0); } catch { }
+                         }
+                     }
+                 }
+            }
+
+            // AOSP Optimized Flash Super: Group logical partitions and flash them more efficiently
+            if (optimizeSuper && IsUserspace())
+            {
+                string emptyPath = Path.Combine(imageDir, "super_empty.img");
+                if (File.Exists(emptyPath))
+                {
+                    var logicalPartitionsToFlash = new List<(string Name, string Path)>();
+                    for (int i = 0; i < commands.Count; i++)
+                    {
+                        var parts = commands[i];
+                        if (parts[0] == "flash")
+                        {
+                            string? part = GetPartitionFromArgs(parts.GetRange(1, parts.Count - 1));
+                            string? imgName = parts.Count > 2 ? parts[2] : part + ".img"; // Simple heuristic for img name
+                            if (part != null && IsLogicalOptimized(part))
+                            {
+                                string imgPath = Path.Combine(imageDir, imgName!);
+                                if (File.Exists(imgPath))
+                                {
+                                    logicalPartitionsToFlash.Add((part, imgPath));
+                                    // Remove from original commands so we don't flash it twice
+                                    commands.RemoveAt(i);
+                                    i--;
+                                }
+                            }
+                        }
+                    }
+
+                    if (logicalPartitionsToFlash.Count > 0)
+                    {
+                        NotifyCurrentStep("Optimizing super partition flash from info...");
+                        var helper = new SuperFlashHelper(this, "super", emptyPath);
+                        foreach (var (name, path) in logicalPartitionsToFlash)
+                        {
+                            helper.AddPartition(name, path);
+                        }
+                        helper.Flash();
+                    }
+                }
+            }
+
+            foreach (var parts in commands)
+            {
+                string cmd = parts[0];
+                var args = parts.GetRange(1, parts.Count - 1);
+
+                switch (cmd)
+                {
+                    case "version":
+                        if (args.Count > 0 && !CheckFastbootInfoRequirements(args[0]))
+                            NotifyCurrentStep($"WARNING: Unsupported fastboot-info.txt version: {args[0]}");
+                        break;
+                    case "flash":
+                        ExecuteFlashTaskFromInfo(args, imageDir, currentSlot, otherSlot);
+                        break;
+                    case "erase":
+                        if (args.Count > 0) ErasePartition(args[0]);
+                        break;
+                    case "reboot":
+                        if (args.Count > 0) Reboot(args[0]);
+                        else Reboot();
+                        break;
+                    case "update-super":
+                        string target = args.Count > 0 ? args[0] : "super";
+                        string emptyPath = Path.Combine(imageDir, "super_empty.img");
+                        if (File.Exists(emptyPath)) UpdateSuper(target, emptyPath);
+                        break;
+                    default:
+                        NotifyCurrentStep($"Unknown command in fastboot-info.txt: {cmd}");
+                        break;
+                }
+            }
+        }
+
+        private string? GetPartitionFromArgs(List<string> args)
+        {
+            // Simple heuristic to find partition name in flash arguments
+            foreach(var arg in args)
+            {
+                if (!arg.StartsWith("--")) return arg;
+            }
+            return null;
+        }
+
+        private void ExecuteFlashTaskFromInfo(List<string> args, string imageDir, string currentSlot, string otherSlot)
+        {
+            bool applyVbmeta = false;
+            string targetSlot = currentSlot;
+            string? partition = null;
+            string? imgName = null;
+
+            foreach (var arg in args)
+            {
+                if (arg == "--apply-vbmeta") applyVbmeta = true;
+                else if (arg == "--slot-other") targetSlot = otherSlot;
+                else if (partition == null) partition = arg;
+                else if (imgName == null) imgName = arg;
+            }
+
+            if (partition != null && imgName != null)
+            {
+                string imgPath = Path.Combine(imageDir, imgName);
+                if (File.Exists(imgPath))
+                {
+                    // AOSP: Èç¹ûÊÇ¶¯Ì¬·ÖÇø£¬ÎªÁË±£Ö¤×îÓÅ¿Õ¼ä·ÖÅä£¬Ê×ÏÈµ÷Õû´óĞ¡Îª 0¡£
+                    // ResizeLogicalPartition ÄÚ²¿»á×Ô¶¯È·±£Éè±¸´¦ÓÚ fastbootd (userspace) ×´Ì¬¡£
+                    if (IsLogicalOptimized(partition))
+                    {
+                         try { ResizeLogicalPartition(partition, 0); } catch { }
+                    }
+
+                    if (applyVbmeta || IsVbmetaPartition(partition))
+                        FlashVbmeta(partition, imgPath);
+                    else
+                        FlashImage(partition, imgPath, targetSlot);
+                }
+                else
+                {
+                    NotifyCurrentStep($"WARNING: Image {imgName} for {partition} not found in {imageDir}");
+                }
+            }
+        }
+
+        public bool IsVbmetaPartition(string partition)
+        {
+            return partition.StartsWith("vbmeta", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public bool CheckFastbootInfoRequirements(string version)
+        {
+            if (uint.TryParse(version, out uint v)) return v <= 2; // Support up to version 2
+            return false;
+        }
+
+        /// <summary>
+        /// Ö´ĞĞ FlashAll (ÔÚÖ¸¶¨Ä¿Â¼ÏÂÑ°ÕÒ²¢Ë¢Èë»ù´¡·ÖÇø)
+        /// </summary>
+        public void FlashAll(string productOutDir, bool wipe = false, bool skipSecondary = false, bool force = false, bool optimizeSuper = true)
+        {
+            CancelSnapshotIfNeeded();
+            
+            // Ô¤¼ÓÔØ¶¯Ì¬·ÖÇøÔªÊı¾İÒÔÓÅ»¯ IsLogical ËÙ¶È
+            LoadLogicalPartitionsFromMetadata(Path.Combine(productOutDir, "super_empty.img"));
+
+            string infoPath = Path.Combine(productOutDir, "fastboot-info.txt");
+            if (File.Exists(infoPath))
+            {
+                NotifyCurrentStep("Using fastboot-info.txt for flashing...");
+                FlashFromInfo(File.ReadAllText(infoPath), productOutDir, wipe, null, optimizeSuper);
+                if (wipe) WipeUserData();
+                return;
+            }
+
+            string productInfoPath = Path.Combine(productOutDir, "android-info.txt");
+            if (File.Exists(productInfoPath))
+            {
+                VerifyRequirements(File.ReadAllText(productInfoPath), force);
+            }
+
+            var imageFiles = Directory.GetFiles(productOutDir, "*.img").ToList();
+            List<string> physicalImages = new List<string>();
+            List<string> logicalImages = new List<string>();
+
+            foreach (var f in imageFiles)
+            {
+                string part = Path.GetFileNameWithoutExtension(f);
+                if (IsLogicalOptimized(part)) logicalImages.Add(f);
+                else physicalImages.Add(f);
+            }
+
+            physicalImages = physicalImages.OrderBy(f => {
+                string part = Path.GetFileNameWithoutExtension(f);
+                if (part.EndsWith("_other", StringComparison.OrdinalIgnoreCase)) part = part.Substring(0, part.Length - 6);
+                int index = Array.IndexOf(PartitionPriority, part.ToLower());
+                return index == -1 ? int.MaxValue : index;
+            }).ToList();
+
+            string currentSlot = GetCurrentSlot();
+
+            foreach (var filePath in physicalImages)
+            {
+                string fileName = Path.GetFileNameWithoutExtension(filePath);
+                string part = fileName;
+                string targetSlot = currentSlot;
+                bool isOther = false;
+
+                if (fileName.EndsWith("_other", StringComparison.OrdinalIgnoreCase))
+                {
+                    part = fileName.Substring(0, fileName.Length - 6);
+                    targetSlot = currentSlot == "a" ? "b" : "a";
+                    isOther = true;
+                }
+
+                // Ë¢ÈëÖ¸¶¨²å²Û
+                if (IsVbmetaPartition(part)) FlashVbmeta(part, filePath);
+                else FlashImage(part, filePath, targetSlot);
+
+                // Èç¹û²»ÊÇ _other ¾µÏñ£¬ÇÒ²»Ìø¹ıµÚ¶ş²å²ÛÇÒ¸Ã·ÖÇøÖ§³Ö A/B
+                if (!isOther && !skipSecondary && HasSlot(part))
+                {
+                    string otherSlot = currentSlot == "a" ? "b" : "a";
+                    if (IsVbmetaPartition(part)) FlashVbmeta(part, filePath);
+                    else FlashImage(part, filePath, otherSlot);
+                }
+
+                string sigPath = Path.Combine(productOutDir, fileName + ".sig");
                 if (File.Exists(sigPath))
                 {
                     Signature(File.ReadAllBytes(sigPath));
+                }
+            }
+
+            if (logicalImages.Count > 0)
+            {
+                if (optimizeSuper && IsUserspace())
+                {
+                    NotifyCurrentStep("Optimizing super partition flash...");
+                    string emptyPath = Path.Combine(productOutDir, "super_empty.img");
+                    var helper = new SuperFlashHelper(this, "super", File.Exists(emptyPath) ? emptyPath : null);
+                    foreach (var logImg in logicalImages)
+                    {
+                        helper.AddPartition(Path.GetFileNameWithoutExtension(logImg), logImg);
+                    }
+                    helper.Flash();
+                }
+                else
+                {
+                    // AOSP: Before flashing logical partitions individually, resize them to 0
+                    // to ensure optimal placement in the super partition.
+                    foreach (var logImg in logicalImages)
+                    {
+                        string part = Path.GetFileNameWithoutExtension(logImg);
+                        if (IsLogicalOptimized(part))
+                        {
+                            try { ResizeLogicalPartition(part, 0); } catch { }
+                        }
+                    }
+
+                    foreach (var logImg in logicalImages)
+                    {
+                        FlashImage(Path.GetFileNameWithoutExtension(logImg), logImg);
+                    }
                 }
             }
 
@@ -991,12 +1777,13 @@ namespace SharpFastboot
         }
 
         /// <summary>
-        /// æ¸…é™¤ç”¨æˆ·æ•°æ®å’Œç¼“å­˜
+        /// Çå³ıÓÃ»§Êı¾İ¡¢»º´æ¼°ÔªÊı¾İ·ÖÇø (¶ÔÓ¦ fastboot -w)
         /// </summary>
         public void WipeUserData()
         {
             try { FormatPartition("userdata"); } catch { }
             try { FormatPartition("cache"); } catch { }
+            try { FormatPartition("metadata"); } catch { }
         }
     }
 }

@@ -2,15 +2,34 @@ using LibLpSharp;
 
 namespace LibSparseSharp;
 
-public class SuperImageBuilder(ulong deviceSize, uint metadataMaxSize, uint metadataSlotCount, uint blockSize = 4096)
+public class SuperImageBuilder
 {
-    private readonly MetadataBuilder _builder = MetadataBuilder.New(deviceSize, metadataMaxSize, metadataSlotCount);
+    private readonly MetadataBuilder _builder;
     private readonly Dictionary<string, string> _partitionImages = [];
-    private readonly uint _blockSize = blockSize;
+    private readonly uint _blockSize;
+
+    public SuperImageBuilder(ulong deviceSize, uint metadataMaxSize, uint metadataSlotCount, uint blockSize = 4096)
+    {
+        _builder = MetadataBuilder.New(deviceSize, metadataMaxSize, metadataSlotCount);
+        _blockSize = blockSize;
+    }
+
+    public SuperImageBuilder(MetadataBuilder builder, uint blockSize = 4096)
+    {
+        _builder = builder;
+        _blockSize = blockSize;
+    }
+
+    public Partition? FindPartition(string name) => _builder.FindPartition(name);
 
     public void AddPartition(string name, ulong size, string groupName, uint attributes, string? imagePath = null)
     {
         _builder.AddPartition(name, groupName, attributes);
+        UpdatePartitionImage(name, size, imagePath);
+    }
+
+    public void UpdatePartitionImage(string name, ulong size, string? imagePath = null)
+    {
         var partition = _builder.FindPartition(name);
         if (partition != null)
         {

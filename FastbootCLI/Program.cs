@@ -174,7 +174,12 @@ namespace FastbootCLI
                         if (args.Count < 1) throw new Exception("flash: usage: flash <partition> [ <filename> ]");
                         string part = args[0];
                         string? file = args.Count > 1 ? args[1] : null;
-                        if (file == null) throw new Exception("flash: filename required (auto-discovery not implemented)");
+
+                        if (file == null)
+                        {
+                            file = FindImageFile(part);
+                            if (file == null) throw new Exception($"flash: '{part}' not found in current directory and ANDROID_PRODUCT_OUT is not set or file not found.");
+                        }
 
                         if (file.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) && (part == "update" || part == "zip"))
                         {
@@ -188,14 +193,55 @@ namespace FastbootCLI
                             string? ramdiskPath = args.Count > 3 ? args[3] : null;
                             util.FlashRaw(targetPartition, kernelPath, ramdiskPath).ThrowIfError();
                         }
+                        else if (part == "vbmeta")
+                        {
+                            if (file == null) throw new Exception("flash vbmeta: usage: flash vbmeta <filename> [ --disable-verity ] [ --disable-verification ]");
+                            bool disableVerity = args.Contains("--disable-verity");
+                            bool disableVerification = args.Contains("--disable-verification");
+                            util.FlashVbmeta(part, file, disableVerity, disableVerification).ThrowIfError();
+                        }
+                        else if (part == "bootconfig")
+                        {
+                            if (file == null || args.Count < 3) throw new Exception("bootconfig: usage: flash bootconfig <partition> <key> <value>");
+                            string targetPartition = file; // partition
+                            string key = args[2];
+                            string val = args[3];
+                            // This would usually be applied to a local file first and then flashed.
+                            // However, we'll implement a simple one-off flash variant for bootconfig data if possible,
+                            // or just skip for now as bootconfig is typically part of vendor_boot.img.
+                            throw new NotSupportedException("To modify bootconfig, use a local BootImage and then flash the image.");
+                        }
                         else
                         {
                             string target = part;
-                            if (slot != null && util.HasSlot(part)) target = part + "_" + slot;
-                            util.FlashImage(target, file);
+                            string? slotOverride = slot;
+                            if (args.Contains("--slot"))
+                            {
+                                int idx = args.IndexOf("--slot");
+                                if (idx + 1 < args.Count) slotOverride = args[idx + 1];
+                            }
+                            util.FlashImage(target, file, slotOverride);
                         }
                         Console.WriteLine("OKAY");
                     }
+                    break;
+                case "gsi":
+                    if (args.Count == 0) throw new Exception("gsi: usage: gsi <wipe|disable|status>");
+                    if (args[0] == "wipe") util.GsiWipe().ThrowIfError();
+                    else if (args[0] == "disable") util.GsiDisable().ThrowIfError();
+                    else if (args[0] == "status") Console.WriteLine(util.GsiStatus().Response);
+                    else throw new Exception("unknown gsi command: " + args[0]);
+                    Console.WriteLine("OKAY");
+                    break;
+                case "update-super":
+                    if (args.Count < 2) throw new Exception("update-super: usage: update-super <partition> <filename>");
+                    util.UpdateSuper(args[0], args[1]).ThrowIfError();
+                    Console.WriteLine("OKAY");
+                    break;
+                case "wipe-super":
+                    if (args.Count == 0) throw new Exception("wipe-super: usage: wipe-super <partition>");
+                    util.WipeSuper(args[0]).ThrowIfError();
+                    Console.WriteLine("OKAY");
                     break;
                 case "erase":
                     if (args.Count == 0) throw new Exception("erase: usage: erase <partition>");
@@ -236,7 +282,18 @@ namespace FastbootCLI
                     Console.WriteLine("OKAY");
                     break;
                 case "snapshot-update":
-                    if (args.Count == 0) util.SnapshotUpdate().ThrowIfError();
+                    if (args.Count > 0 && args[0] == "merge")
+                    {
+                        if (args.Contains("--wait"))
+                        {
+                            util.WaitForSnapshotMerge();
+                        }
+                        else
+                        {
+                            util.SnapshotUpdate("merge").ThrowIfError();
+                        }
+                    }
+                    else if (args.Count == 0) util.SnapshotUpdate().ThrowIfError();
                     else util.SnapshotUpdate(args[0]).ThrowIfError();
                     Console.WriteLine("OKAY");
                     break;
@@ -264,8 +321,14 @@ namespace FastbootCLI
                     if (args.Count < 1) throw new Exception("boot: usage: boot <kernel> [ <ramdisk> [ <second> ] ]");
                     {
                         string kernel = args[0];
+                        if (!File.Exists(kernel)) kernel = FindImageFile(kernel) ?? kernel;
+                        
                         string? ramdisk = args.Count > 1 ? args[1] : null;
+                        if (ramdisk != null && !File.Exists(ramdisk)) ramdisk = FindImageFile(ramdisk) ?? ramdisk;
+                        
                         string? second = args.Count > 2 ? args[2] : null;
+                        if (second != null && !File.Exists(second)) second = FindImageFile(second) ?? second;
+
                         util.Boot(kernel, ramdisk, second).ThrowIfError();
                         Console.WriteLine("OKAY");
                     }
@@ -275,16 +338,19 @@ namespace FastbootCLI
                         string? productOut = Environment.GetEnvironmentVariable("ANDROID_PRODUCT_OUT");
                         if (string.IsNullOrEmpty(productOut))
                         {
-                            // If not set, maybe use current directory?
                             productOut = Directory.GetCurrentDirectory();
                         }
-                        util.FlashAll(productOut, wipe);
+                        bool skipSecondary = args.Contains("--skip-secondary");
+                        bool force = args.Contains("-f") || args.Contains("--force");
+                        util.FlashAll(productOut, wipe, skipSecondary, force);
                         Console.WriteLine("OKAY");
                     }
                     break;
                 case "stage":
                     if (args.Count == 0) throw new Exception("stage: usage: stage <filename>");
-                    using (var fs = File.OpenRead(args[0]))
+                    string stageFile = args[0];
+                    if (!File.Exists(stageFile)) stageFile = FindImageFile(stageFile) ?? stageFile;
+                    using (var fs = File.OpenRead(stageFile))
                     {
                         util.Stage(fs, fs.Length).ThrowIfError();
                     }
@@ -367,6 +433,9 @@ namespace FastbootCLI
             Console.WriteLine("  flashall                                 Flash all images in ANDROID_PRODUCT_OUT");
             Console.WriteLine("  flash <partition> [ <filename> ]         Write a file to a flash partition");
             Console.WriteLine("  flash raw <partition> <kernel> [ <rdisk> ] Create bootimage and flash it");
+            Console.WriteLine("  flash vbmeta <filename> [--disable-verity] [--disable-verification]");
+            Console.WriteLine("  update-super <partition> <filename>      Update super metadata");
+            Console.WriteLine("  wipe-super <partition>                   Wipe super metadata");
             Console.WriteLine("  erase <partition>                        Erase a flash partition");
             Console.WriteLine("  format <partition>                       Format a flash partition");
             Console.WriteLine("  getvar <variable>                        Display a bootloader variable");
@@ -399,6 +468,24 @@ namespace FastbootCLI
         static void ShowVersion()
         {
             Console.WriteLine("fastboot version 1.0.0 (SharpFastboot)");
+        }
+
+        static string? FindImageFile(string partition)
+        {
+            string productOut = Environment.GetEnvironmentVariable("ANDROID_PRODUCT_OUT") ?? "";
+            string[] searchPaths = new string[] { Directory.GetCurrentDirectory(), productOut };
+            string[] extensions = new string[] { ".img", ".bin" };
+
+            foreach (var path in searchPaths)
+            {
+                if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) continue;
+                foreach (var ext in extensions)
+                {
+                    string fullPath = Path.Combine(path, partition + ext);
+                    if (File.Exists(fullPath)) return fullPath;
+                }
+            }
+            return null;
         }
     }
 }

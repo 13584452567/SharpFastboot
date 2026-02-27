@@ -82,7 +82,17 @@ namespace SharpFastboot
             if (parts.Length != 2) return true;
 
             string key = parts[0].Trim();
-            string[] allowedValues = parts[1].Split(new[] { '|', ',' }, StringSplitOptions.RemoveEmptyEntries);
+            string expectedValue = parts[1].Trim();
+
+            // Handle partition-exists special key
+            if (key == "partition-exists")
+            {
+                if (_fastboot.PartitionExists(expectedValue)) return true;
+                error = $"Requirement failed: partition {expectedValue} does not exist on device";
+                return false;
+            }
+
+            string[] allowedValues = expectedValue.Split(new[] { '|', ',' }, StringSplitOptions.RemoveEmptyEntries);
             string deviceValue = GetVariable(key);
 
             foreach (string val in allowedValues)
@@ -95,7 +105,7 @@ namespace SharpFastboot
                 else if (trimmedVal == deviceValue) return true;
             }
 
-            error = $"Requirement failed: {key} (device: {deviceValue}, expected: {parts[1]})";
+            error = $"Requirement failed: {key} (device: {deviceValue}, expected: {expectedValue})";
             return false;
         }
 

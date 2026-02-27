@@ -27,18 +27,27 @@ namespace SharpFastboot.Usb.Windows
                 return Marshal.GetLastWin32Error();
             if (!WinUsb_GetCurrentAlternateSetting(WinUSBHandle, out InterfaceNum))
                 return Marshal.GetLastWin32Error();
-            IntPtr ptr = Marshal.AllocHGlobal(Marshal.SizeOf(USBDeviceDescriptor));
-            if (!WinUsb_GetDescriptor(WinUSBHandle, USB_DEVICE_DESCRIPTOR_TYPE, 0, 0, ptr, (uint)Marshal.SizeOf(USBDeviceDescriptor), out bytesTransfered))
+            IntPtr ptr = Marshal.AllocHGlobal(Marshal.SizeOf<USBDeviceDescriptor>());
+            if (!WinUsb_GetDescriptor(WinUSBHandle, USB_DEVICE_DESCRIPTOR_TYPE, 0, 0, ptr, (uint)Marshal.SizeOf<USBDeviceDescriptor>(), out bytesTransfered))
                 return Marshal.GetLastWin32Error();
             USBDeviceDescriptor = Marshal.PtrToStructure<USBDeviceDescriptor>(ptr);
             Marshal.FreeHGlobal(ptr);
-            ptr = Marshal.AllocHGlobal(Marshal.SizeOf(USBDeviceConfigDescriptor));
-            if (!WinUsb_GetDescriptor(WinUSBHandle, USB_CONFIGURATION_DESCRIPTOR_TYPE, 0, 0, ptr, (uint)Marshal.SizeOf(USBDeviceConfigDescriptor), out bytesTransfered))
+            ptr = Marshal.AllocHGlobal(Marshal.SizeOf<USBDeviceConfigDescriptor>());
+            if (!WinUsb_GetDescriptor(WinUSBHandle, USB_CONFIGURATION_DESCRIPTOR_TYPE, 0, 0, ptr, (uint)Marshal.SizeOf<USBDeviceConfigDescriptor>(), out bytesTransfered))
                 return Marshal.GetLastWin32Error();
             USBDeviceConfigDescriptor = Marshal.PtrToStructure<USBDeviceConfigDescriptor>(ptr);
             Marshal.FreeHGlobal(ptr);
             if (!WinUsb_QueryInterfaceSettings(WinUSBHandle, InterfaceNum, out USBDeviceInterfaceDescriptor))
                 return Marshal.GetLastWin32Error();
+
+            // Check if it's a Fastboot interface
+            if (USBDeviceInterfaceDescriptor.bInterfaceClass != 0xFF ||
+                USBDeviceInterfaceDescriptor.bInterfaceSubClass != 0x42 ||
+                USBDeviceInterfaceDescriptor.bInterfaceProtocol != 0x03)
+            {
+                // This is not a fastboot interface, skip it.
+                return -1;
+            }
 
             for (byte endpoint = 0; endpoint < USBDeviceInterfaceDescriptor.bNumEndpoints; endpoint++)
             {

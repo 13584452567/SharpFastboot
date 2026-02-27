@@ -102,6 +102,7 @@ namespace SharpFastboot.Usb.Windows
             public byte iInterface;
         }
 
+        public static uint DIGCF_PRESENT { get; } = 0x00000002;
         public static uint DIGCF_DEVICEINTERFACE { get; } = 0x00000010;
 
         [DllImport("setupapi.dll", CharSet = CharSet.Auto, CallingConvention = CallingConvention.StdCall, SetLastError = true)]

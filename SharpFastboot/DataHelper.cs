@@ -1,10 +1,11 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 
 namespace SharpFastboot
 {
     public class DataHelper
     {
-        public static T Bytes2Struct<T>(byte[] data, int length) where T : struct
+        public static T Bytes2Struct<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)] T>(byte[] data, int length) where T : struct
         {
             T str;
             IntPtr ptr = Marshal.AllocHGlobal(length);
@@ -16,7 +17,7 @@ namespace SharpFastboot
 
         public static byte[] Struct2Bytes<T>(T str) where T : struct
         {
-            int length = Marshal.SizeOf(str);
+            int length = Marshal.SizeOf<T>();
             byte[] data = new byte[length];
             IntPtr ptr = Marshal.AllocHGlobal(length);
             Marshal.StructureToPtr(str, ptr, true);
@@ -25,9 +26,9 @@ namespace SharpFastboot
             return data;
         }
 
-        public static T Deserialize<T>(Stream stream) where T : struct
+        public static T Deserialize<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)] T>(Stream stream) where T : struct
         {
-            int size = Marshal.SizeOf(typeof(T));
+            int size = Marshal.SizeOf<T>();
             byte[] buffer = new byte[size];
             stream.ReadExactly(buffer, 0, size);
             return Bytes2Struct<T>(buffer, size);

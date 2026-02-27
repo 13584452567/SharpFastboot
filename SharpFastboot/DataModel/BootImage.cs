@@ -220,6 +220,77 @@ namespace SharpFastboot.DataModel
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct BootImageHeaderV5
+    {
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
+        public byte[] Magic;
+
+        public uint KernelSize;
+        public uint RamdiskSize;
+        public uint OsVersion;
+        public uint HeaderSize;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+        public uint[] Reserved;
+
+        public uint HeaderVersion;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 1536)]
+        public byte[] Cmdline;
+
+        public uint SignatureSize;
+        public uint VendorBootconfigSize;
+
+        public static BootImageHeaderV5 Create()
+        {
+            return new BootImageHeaderV5
+            {
+                Magic = Encoding.ASCII.GetBytes("ANDROID!"),
+                Reserved = new uint[4],
+                HeaderVersion = 5,
+                Cmdline = new byte[1536]
+            };
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct BootImageHeaderV6
+    {
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
+        public byte[] Magic;
+
+        public uint KernelSize;
+        public uint RamdiskSize;
+        public uint OsVersion;
+        public uint HeaderSize;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
+        public uint[] Reserved;
+
+        public uint HeaderVersion;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 1536)]
+        public byte[] Cmdline;
+
+        public uint SignatureSize;
+        public uint VendorBootconfigSize;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+        public byte[] Reserved1;
+
+        public static BootImageHeaderV6 Create()
+        {
+            return new BootImageHeaderV6
+            {
+                Magic = Encoding.ASCII.GetBytes("ANDROID!"),
+                Reserved = new uint[4],
+                HeaderVersion = 6,
+                Cmdline = new byte[1536]
+            };
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct VendorBootImageHeaderV3
     {
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
@@ -334,6 +405,20 @@ namespace SharpFastboot.DataModel
                     boot.ReadData(stream, header);
                     return boot;
                 }
+                else if (version == 1)
+                {
+                    var header = DataHelper.Deserialize<BootImageHeaderV1>(stream);
+                    var boot = new BootImage(header);
+                    boot.ReadData(stream, header);
+                    return boot;
+                }
+                else if (version == 2)
+                {
+                    var header = DataHelper.Deserialize<BootImageHeaderV2>(stream);
+                    var boot = new BootImage(header);
+                    boot.ReadData(stream, header);
+                    return boot;
+                }
                 else if (version == 3)
                 {
                     var header = DataHelper.Deserialize<BootImageHeaderV3>(stream);
@@ -344,6 +429,20 @@ namespace SharpFastboot.DataModel
                 else if (version == 4)
                 {
                     var header = DataHelper.Deserialize<BootImageHeaderV4>(stream);
+                    var boot = new BootImage(header);
+                    boot.ReadData(stream, header);
+                    return boot;
+                }
+                else if (version == 5)
+                {
+                    var header = DataHelper.Deserialize<BootImageHeaderV5>(stream);
+                    var boot = new BootImage(header);
+                    boot.ReadData(stream, header);
+                    return boot;
+                }
+                else if (version == 6)
+                {
+                    var header = DataHelper.Deserialize<BootImageHeaderV6>(stream);
                     var boot = new BootImage(header);
                     boot.ReadData(stream, header);
                     return boot;
@@ -386,6 +485,17 @@ namespace SharpFastboot.DataModel
             Second = ReadPadded(stream, offset, header.SecondSize, pageSize);
         }
 
+        private void ReadData(Stream stream, BootImageHeaderV1 header)
+        {
+            uint pageSize = header.PageSize;
+            long offset = header.HeaderSize;
+            Kernel = ReadPadded(stream, offset, header.KernelSize, pageSize);
+            offset += (header.KernelSize + pageSize - 1) / pageSize * pageSize;
+            Ramdisk = ReadPadded(stream, offset, header.RamdiskSize, pageSize);
+            offset += (header.RamdiskSize + pageSize - 1) / pageSize * pageSize;
+            Second = ReadPadded(stream, offset, header.SecondSize, pageSize);
+        }
+
         private void ReadData(Stream stream, BootImageHeaderV3 header)
         {
             long offset = header.HeaderSize;
@@ -402,6 +512,30 @@ namespace SharpFastboot.DataModel
             Ramdisk = ReadPadded(stream, offset, header.RamdiskSize, 4096);
             offset += (header.RamdiskSize + 4095) / 4096 * 4096;
             Signature = ReadPadded(stream, offset, header.SignatureSize, 4096);
+        }
+
+        private void ReadData(Stream stream, BootImageHeaderV5 header)
+        {
+            long offset = header.HeaderSize;
+            Kernel = ReadPadded(stream, offset, header.KernelSize, 4096);
+            offset += (header.KernelSize + 4095) / 4096 * 4096;
+            Ramdisk = ReadPadded(stream, offset, header.RamdiskSize, 4096);
+            offset += (header.RamdiskSize + 4095) / 4096 * 4096;
+            Signature = ReadPadded(stream, offset, header.SignatureSize, 4096);
+            offset += (header.SignatureSize + 4095) / 4096 * 4096;
+            Bootconfig = ReadPadded(stream, offset, header.VendorBootconfigSize, 4096);
+        }
+
+        private void ReadData(Stream stream, BootImageHeaderV6 header)
+        {
+            long offset = header.HeaderSize;
+            Kernel = ReadPadded(stream, offset, header.KernelSize, 4096);
+            offset += (header.KernelSize + 4095) / 4096 * 4096;
+            Ramdisk = ReadPadded(stream, offset, header.RamdiskSize, 4096);
+            offset += (header.RamdiskSize + 4095) / 4096 * 4096;
+            Signature = ReadPadded(stream, offset, header.SignatureSize, 4096);
+            offset += (header.SignatureSize + 4095) / 4096 * 4096;
+            Bootconfig = ReadPadded(stream, offset, header.VendorBootconfigSize, 4096);
         }
 
         private void ReadData(Stream stream, VendorBootImageHeaderV3 header)
@@ -424,6 +558,23 @@ namespace SharpFastboot.DataModel
             Bootconfig = ReadPadded(stream, offset, header.BootconfigSize, header.PageSize);
         }
 
+        public string GetBootconfigText()
+        {
+            if (Bootconfig == null || Bootconfig.Length == 0) return "";
+            return Encoding.ASCII.GetString(Bootconfig).TrimEnd('\0');
+        }
+
+        public void SetBootconfigText(string text)
+        {
+            Bootconfig = Encoding.ASCII.GetBytes(text + "\0");
+        }
+
+        public void AddBootconfig(string key, string value)
+        {
+            string current = GetBootconfigText();
+            SetBootconfigText(current + (string.IsNullOrEmpty(current) ? "" : "\n") + $"{key} = \"{value}\"");
+        }
+
         public void Serialize(Stream stream)
         {
             if (Header is BootImageHeaderV0 h0)
@@ -435,6 +586,16 @@ namespace SharpFastboot.DataModel
                 WritePadded(stream, Kernel, h0.PageSize);
                 WritePadded(stream, Ramdisk, h0.PageSize);
                 WritePadded(stream, Second, h0.PageSize);
+            }
+            else if (Header is BootImageHeaderV1 h1)
+            {
+                h1.KernelSize = (uint)Kernel.Length;
+                h1.RamdiskSize = (uint)Ramdisk.Length;
+                h1.SecondSize = (uint)Second.Length;
+                DataHelper.Serialize(stream, h1);
+                WritePadded(stream, Kernel, h1.PageSize);
+                WritePadded(stream, Ramdisk, h1.PageSize);
+                WritePadded(stream, Second, h1.PageSize);
             }
             else if (Header is BootImageHeaderV3 h3)
             {
@@ -453,6 +614,30 @@ namespace SharpFastboot.DataModel
                 WritePadded(stream, Kernel, 4096);
                 WritePadded(stream, Ramdisk, 4096);
                 WritePadded(stream, Signature, 4096);
+            }
+            else if (Header is BootImageHeaderV5 h5)
+            {
+                h5.KernelSize = (uint)Kernel.Length;
+                h5.RamdiskSize = (uint)Ramdisk.Length;
+                h5.SignatureSize = (uint)Signature.Length;
+                h5.VendorBootconfigSize = (uint)Bootconfig.Length;
+                DataHelper.Serialize(stream, h5);
+                WritePadded(stream, Kernel, 4096);
+                WritePadded(stream, Ramdisk, 4096);
+                WritePadded(stream, Signature, 4096);
+                WritePadded(stream, Bootconfig, 4096);
+            }
+            else if (Header is BootImageHeaderV6 h6)
+            {
+                h6.KernelSize = (uint)Kernel.Length;
+                h6.RamdiskSize = (uint)Ramdisk.Length;
+                h6.SignatureSize = (uint)Signature.Length;
+                h6.VendorBootconfigSize = (uint)Bootconfig.Length;
+                DataHelper.Serialize(stream, h6);
+                WritePadded(stream, Kernel, 4096);
+                WritePadded(stream, Ramdisk, 4096);
+                WritePadded(stream, Signature, 4096);
+                WritePadded(stream, Bootconfig, 4096);
             }
             else if (Header is VendorBootImageHeaderV3 v3)
             {
