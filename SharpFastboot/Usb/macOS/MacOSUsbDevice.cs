@@ -142,7 +142,7 @@ namespace SharpFastboot.Usb.macOS
                 var devReq = GetDelegate<DeviceRequestDelegate>(devicePtr, Offset_DeviceRequest);
                 if (devReq(devicePtr, ref req) == 0 && req.wLenDone > 2)
                 {
-                    SerialNumber = System.Text.Encoding.Unicode.GetString(buf, 2, (int)req.wLenDone - 2);
+                    SerialNumber = System.Text.Encoding.Unicode.GetString(buf, 2, (int)req.wLenDone - 2).TrimEnd('\0');
                     return 0;
                 }
                 return -1;

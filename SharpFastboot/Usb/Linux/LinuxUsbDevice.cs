@@ -101,7 +101,7 @@ namespace SharpFastboot.Usb.Linux
                     n = ioctl(fd, ctrlCode, ref ctrl);
                     if (n > 2)
                     {
-                        SerialNumber = Encoding.Unicode.GetString(descriptor, 2, n - 2);
+                        SerialNumber = Encoding.Unicode.GetString(descriptor, 2, n - 2).TrimEnd('\0');
                         return 0;
                     }
                 }

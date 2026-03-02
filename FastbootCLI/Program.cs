@@ -404,8 +404,20 @@ namespace FastbootCLI
             var devices = GetAllDevices();
             foreach (var dev in devices)
             {
-                dev.GetSerialNumber();
-                Console.WriteLine($"{(dev.SerialNumber ?? "unknown")}\tfastboot");
+                if (dev.GetSerialNumber() != 0)
+                {
+                    dev.Dispose();
+                    continue;
+                }
+                
+                if (string.IsNullOrEmpty(dev.SerialNumber) || dev.SerialNumber == "unknown")
+                {
+                    dev.Dispose();
+                    continue;
+                }
+
+                Console.WriteLine($"{dev.SerialNumber}\tfastboot");
+                dev.Dispose();
             }
         }
 

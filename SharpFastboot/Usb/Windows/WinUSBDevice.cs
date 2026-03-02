@@ -111,7 +111,7 @@ namespace SharpFastboot.Usb.Windows
                 Marshal.FreeHGlobal(ptr);
                 ptr = Marshal.AllocHGlobal((int)descriptorSize);
             }
-            SerialNumber = Marshal.PtrToStringUni(ptr + 2, (int)(bytes_get - 2) / 2);
+            SerialNumber = Marshal.PtrToStringUni(ptr + 2, (int)(bytes_get - 2) / 2)?.TrimEnd('\0');
             Marshal.FreeHGlobal(ptr);
             return 0;
         }
