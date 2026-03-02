@@ -125,7 +125,19 @@ namespace SharpFastboot
                 Console.Error.WriteLine("command write failed: " + e.Message); // Redirect to stderr
                 return new FastbootResponse { Result = FastbootState.Fail, Response = "command write failed: " + e.Message };
             }
-            return HandleResponse();
+
+            var response = HandleResponse();
+
+            if (command.StartsWith("devices"))
+            {
+                Console.WriteLine(response.Response); // Redirect 'devices' output to stdout
+            }
+            else
+            {
+                Console.Error.WriteLine(response.Response); // Redirect other outputs to stderr
+            }
+
+            return response;
         }
 
         /// <summary>
