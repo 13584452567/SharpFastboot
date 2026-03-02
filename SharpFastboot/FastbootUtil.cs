@@ -115,10 +115,14 @@ namespace SharpFastboot
             try
             {
                 if (Transport.Write(cmdBytes, cmdBytes.Length) != cmdBytes.Length)
+                {
+                    Console.Error.WriteLine("command write failed (short transfer)"); // Redirect to stderr
                     return new FastbootResponse { Result = FastbootState.Fail, Response = "command write failed (short transfer)" };
+                }
             }
             catch (Exception e)
             {
+                Console.Error.WriteLine("command write failed: " + e.Message); // Redirect to stderr
                 return new FastbootResponse { Result = FastbootState.Fail, Response = "command write failed: " + e.Message };
             }
             return HandleResponse();
@@ -241,8 +245,11 @@ namespace SharpFastboot
                 {
                     string k = line.Substring(0, colonIdx).Trim();
                     string v = line.Substring(colonIdx + 1).TrimStart();
-                    dict[k] = v;
-                    _varCache[k] = v;
+                    if (!dict.ContainsKey(k)) // Avoid duplicate entries
+                    {
+                        dict[k] = v;
+                        _varCache[k] = v;
+                    }
                 }
             }
             return dict;

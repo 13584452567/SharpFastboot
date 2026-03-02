@@ -17,6 +17,10 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x86' ">
+    <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\LibLpSharp\LibLpSharp.csproj" />
     <ProjectReference Include="..\LibSparseSharp\LibSparseSharp.csproj" />

@@ -14,7 +14,14 @@ namespace SharpFastboot.Usb
         {
             if (ForceLibUsb)
             {
-                return LibUsbFinder.FindDevice();
+                try
+                {
+                    return LibUsbFinder.FindDevice();
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException("Failed to use libusb. Ensure libusb is properly installed and configured.", ex);
+                }
             }
 
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -30,7 +37,14 @@ namespace SharpFastboot.Usb
                 return MacOSUsbFinder.FindDevice();
             }
             // Fallback to libusb
-            return LibUsbFinder.FindDevice();
+            try
+            {
+                return LibUsbFinder.FindDevice();
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("Fallback to libusb failed. Ensure libusb is properly installed and configured.", ex);
+            }
         }
     }
 }
