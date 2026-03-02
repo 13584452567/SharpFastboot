@@ -137,9 +137,8 @@ namespace SharpFastboot
 
         public byte[] Read(int length)
         {
-            if (_readBuffer.Count == 0)
+            if (_readBuffer.Count == 0) // UDPSession handles command-response pairing. Content is buffered in _readBuffer.
             {
-                // UDPSession handles command-response pairing. Content is buffered in _readBuffer.
                 return Array.Empty<byte>();
             }
 

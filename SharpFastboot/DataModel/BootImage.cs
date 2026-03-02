@@ -496,6 +496,17 @@ namespace SharpFastboot.DataModel
             Second = ReadPadded(stream, offset, header.SecondSize, pageSize);
         }
 
+        private void ReadData(Stream stream, BootImageHeaderV2 header)
+        {
+            uint pageSize = header.PageSize;
+            long offset = header.HeaderSize;
+            Kernel = ReadPadded(stream, offset, header.KernelSize, pageSize);
+            offset += (header.KernelSize + pageSize - 1) / pageSize * pageSize;
+            Ramdisk = ReadPadded(stream, offset, header.RamdiskSize, pageSize);
+            offset += (header.RamdiskSize + pageSize - 1) / pageSize * pageSize;
+            Second = ReadPadded(stream, offset, header.SecondSize, pageSize);
+        }
+
         private void ReadData(Stream stream, BootImageHeaderV3 header)
         {
             long offset = header.HeaderSize;

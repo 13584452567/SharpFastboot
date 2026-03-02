@@ -126,9 +126,6 @@ namespace FastbootCLI
                 if (current == total) Console.Error.WriteLine();
             };
 
-            // If slot is specified, we might want to ensure we're targeting it
-            // However, we'll let FastbootUtil handle its defaults for now unless we explicitly override.
-
             Stopwatch sw = Stopwatch.StartNew();
 
             switch (command)
@@ -148,7 +145,6 @@ namespace FastbootCLI
                         }
                         catch
                         {
-                            // Some vars might return FAIL if not supported, but fastboot usually shows blank or error
                             Console.WriteLine(args[0] + ": ");
                         }
                     }
@@ -203,12 +199,9 @@ namespace FastbootCLI
                         else if (part == "bootconfig")
                         {
                             if (file == null || args.Count < 3) throw new Exception("bootconfig: usage: flash bootconfig <partition> <key> <value>");
-                            string targetPartition = file; // partition
+                            string targetPartition = file;
                             string key = args[2];
                             string val = args[3];
-                            // This would usually be applied to a local file first and then flashed.
-                            // However, we'll implement a simple one-off flash variant for bootconfig data if possible,
-                            // or just skip for now as bootconfig is typically part of vendor_boot.img.
                             throw new NotSupportedException("To modify bootconfig, use a local BootImage and then flash the image.");
                         }
                         else
@@ -253,11 +246,10 @@ namespace FastbootCLI
                     }
                     break;
                 case "format":
-                    // format[:[<fs-type>][:[<size>]]] <partition>
                     if (args.Count == 0) throw new Exception("format: usage: format <partition>");
                     {
                         string target = args[0];
-                        if (target.Contains(":")) target = target.Split(':').Last(); // Very simple parsing
+                        if (target.Contains(":")) target = target.Split(':').Last();
                         if (slot != null && util.HasSlot(target)) target = target + "_" + slot;
                         util.FormatPartition(target).ThrowIfError();
                         Console.WriteLine("OKAY");
@@ -404,7 +396,6 @@ namespace FastbootCLI
             {
                 return MacOSUsbFinder.FindDevice();
             }
-            // Fallback to libusb
             return LibUsbFinder.FindDevice();
         }
 
@@ -420,7 +411,6 @@ namespace FastbootCLI
 
         static FastbootUtil? ConnectDevice()
         {
-            // 使用 WaitForDevice 进行探测，默认超时 3 秒以便对刚重启进入 fastboot 的设备更友好
             return FastbootUtil.WaitForDevice(GetAllDevices, serial, 3);
         }
 

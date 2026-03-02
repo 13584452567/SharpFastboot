@@ -90,16 +90,18 @@ namespace SharpFastboot.Usb.Windows
                                 seenPaths.Add(devicePath);
                                 var (vid, pid) = ParseVidPid(devicePath);
 
-                                // Try WinUSB first
                                 WinUSBDevice winUsb = new WinUSBDevice { DevicePath = devicePath, VendorId = vid, ProductId = pid, UsbDeviceType = UsbDeviceType.WinUSB };
-                                if (winUsb.CreateHandle() == 0)
+                                int winUsbResult = winUsb.CreateHandle();
+                                if (winUsbResult == 0)
                                 {
                                     devices.Add(winUsb);
                                 }
                                 else
                                 {
                                     winUsb.Dispose();
-                                    // Fallback to legacy
+                                    if (winUsbResult == -1)
+                                        continue;
+                                    
                                     LegacyUsbDevice legacy = new LegacyUsbDevice { DevicePath = devicePath, VendorId = vid, ProductId = pid, UsbDeviceType = UsbDeviceType.WinLegacy };
                                     if (legacy.CreateHandle() == 0)
                                     {
@@ -152,14 +154,11 @@ namespace SharpFastboot.Usb.Windows
 
         private static bool? isLegacyDevice(string devicePath)
         {
-            // Note: This method is kept for backward compatibility if needed, 
-            // but the improved FindDevice logic uses a try-winusb-then-legacy approach.
             byte[] data = new byte[32];
             int bytes_get;
             IntPtr hUsb = SimpleCreateHandle(devicePath);
             if (hUsb == INVALID_HANDLE_VALUE)
                 return null;
-            // The IOCTL code 0x00224028 (Function 10) might be wrong for older Google drivers which used 0x00222000 (Function 0x800).
             bool ret = DeviceIoControl(hUsb, IoGetDescriptorCode, Array.Empty<byte>(), 0, data, 32, out bytes_get, IntPtr.Zero);
             CloseHandle(hUsb);
             return ret;

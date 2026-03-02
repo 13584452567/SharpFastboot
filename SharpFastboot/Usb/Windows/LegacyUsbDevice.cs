@@ -38,7 +38,8 @@ namespace SharpFastboot.Usb.Windows
             int bytes_get;
             if (DeviceIoControl(DeviceHandle, IoGetSerialCode, Array.Empty<byte>(), 0, serial, 512, out bytes_get, IntPtr.Zero))
             {
-                SerialNumber = Encoding.UTF8.GetString(serial);
+                // The legacy driver returns the serial number as a null-terminated UTF-16 string
+                SerialNumber = Encoding.Unicode.GetString(serial, 0, bytes_get).TrimEnd('\0');
                 return 0;
             }
             return Marshal.GetLastWin32Error();
