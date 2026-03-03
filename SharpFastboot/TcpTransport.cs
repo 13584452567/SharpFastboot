@@ -20,7 +20,7 @@ namespace SharpFastboot
             _client = new TcpClient();
             _client.Connect(host, port);
             _stream = _client.GetStream();
-            
+
             InitializeProtocol();
         }
 
@@ -76,7 +76,7 @@ namespace SharpFastboot
         {
             byte[] header = new byte[8];
             BinaryPrimitives.WriteInt64BigEndian(header, length);
-            
+
             _stream.Write(header, 0, 8);
             _stream.Write(data, 0, length);
             _stream.Flush();

@@ -1,11 +1,11 @@
+using LibLpSharp;
 using LibSparseSharp;
 using SharpFastboot.DataModel;
 using SharpFastboot.Usb;
-using System.Runtime.InteropServices;
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
-using LibLpSharp;
 
 namespace SharpFastboot
 {
@@ -34,7 +34,7 @@ namespace SharpFastboot
 
         public void NotifyCurrentStep(string step) => CurrentStepChanged?.Invoke(this, step);
         public void NotifyProgress(long current, long total) => DataTransferProgressChanged?.Invoke(this, (current, total));
-        public void NotifyReceived(FastbootState state, string? info = null, string? text = null) 
+        public void NotifyReceived(FastbootState state, string? info = null, string? text = null)
             => ReceivedFromDevice?.Invoke(this, new FastbootReceivedFromDeviceEventArgs(state, info, text));
 
         /// <summary>
@@ -250,7 +250,7 @@ namespace SharpFastboot
                     withoutSuffix = partition.Substring(0, partition.Length - 2);
 
                 if (_logicalPartitionsFromMetadata.Contains(withoutSuffix)) return true;
-                
+
                 // If it's still not found, we assume it's NOT logical based on the metadata we loaded.
                 // However, some partitions might have been added dynamic manually? Unlikely.
                 return false;
@@ -453,14 +453,14 @@ namespace SharpFastboot
             {
                 NotifyCurrentStep("Operation requires fastbootd, rebooting...");
                 Reboot("fastboot").ThrowIfError();
-                
+
                 System.Threading.Thread.Sleep(2000);
 
                 if (Transport is UsbDevice usbDev)
                 {
                     var newUtil = WaitForDevice(UsbManager.GetAllDevices, usbDev.SerialNumber, 30);
                     if (newUtil == null) throw new Exception("Failed to reconnect to device after rebooting to fastbootd.");
-                    
+
                     this.Transport = newUtil.Transport;
                 }
                 else if (Transport is TcpTransport tcp)
@@ -473,7 +473,7 @@ namespace SharpFastboot
                     bool connected = false;
                     while ((DateTime.Now - start).TotalSeconds < 60)
                     {
-                        try 
+                        try
                         {
                             Transport = new TcpTransport(host, port);
                             connected = true;
@@ -493,7 +493,7 @@ namespace SharpFastboot
                     bool connected = false;
                     while ((DateTime.Now - start).TotalSeconds < 60)
                     {
-                        try 
+                        try
                         {
                             Transport = new UdpTransport(host, port);
                             connected = true;
@@ -582,10 +582,10 @@ namespace SharpFastboot
         {
             CancelSnapshotIfNeeded();
             DumpInfo();
-            
+
             string tempDir = Path.Combine(Path.GetTempPath(), "SharpFastboot_Zip_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempDir);
-            
+
             try
             {
                 NotifyCurrentStep($"Extracting ZIP: {Path.GetFileName(zipPath)}");
@@ -712,7 +712,7 @@ namespace SharpFastboot
             }
             return res;
         }
-        
+
         public FastbootResponse ErasePartition(string partition)
         {
             if (HasSlot(partition))
@@ -831,7 +831,7 @@ namespace SharpFastboot
 
             long oldPos = -1;
             if (stream.CanSeek) oldPos = stream.Position;
-            
+
             try
             {
                 byte[] headerBytes = new byte[SparseFormat.SparseHeaderSize];
@@ -1001,7 +1001,7 @@ namespace SharpFastboot
             byte[]? ramdisk = ramdiskPath != null ? File.ReadAllBytes(ramdiskPath) : null;
             byte[]? second = secondPath != null ? File.ReadAllBytes(secondPath) : null;
             byte[]? dtb = dtbPath != null ? File.ReadAllBytes(dtbPath) : null;
-            
+
             byte[] bootImg = CreateBootImageVersioned(kernel, ramdisk, second, dtb, cmdline, null, header_version, base_addr, page_size);
             return Boot(bootImg);
         }
@@ -1471,12 +1471,15 @@ namespace SharpFastboot
             {
                 byte[] footerBytes = new byte[64];
                 Array.Copy(data, data.Length - 64, footerBytes, 0, 64);
-                try {
+                try
+                {
                     var footer = AvbFooter.FromBytes(footerBytes);
-                    if (footer.IsValid()) {
+                    if (footer.IsValid())
+                    {
                         NotifyCurrentStep($"AVB Footer detected (Vbmeta origin size: {footer.OriginalImageSize}, Vbmeta size: {footer.VbmetaSize})");
                     }
-                } catch { }
+                }
+                catch { }
             }
 
             if (disableVerity || disableVerification)
@@ -1502,11 +1505,11 @@ namespace SharpFastboot
         public FastbootResponse UpdateSuper(string partition, string metadataPath)
         {
             if (!File.Exists(metadataPath)) throw new FileNotFoundException(metadataPath);
-            
+
             // 如果是 super_empty.img，我们需要提取元数据部分发送给设备
             LpMetadata metadata = MetadataReader.ReadFromImageFile(metadataPath);
             byte[] metadataBlob = MetadataWriter.SerializeMetadata(metadata);
-            
+
             NotifyCurrentStep($"Updating super metadata for {partition}");
             DownloadData(metadataBlob).ThrowIfError();
             return RawCommand("update-super:" + partition);
@@ -1552,18 +1555,18 @@ namespace SharpFastboot
             // to ensure optimal placement in the super partition (when not using optimized super flash).
             if (IsUserspace())
             {
-                 foreach (var cmdParts in commands)
-                 {
-                     if (cmdParts[0] == "flash")
-                     {
-                         // Find partition name in arguments
-                         string? part = GetPartitionFromArgs(cmdParts.GetRange(1, cmdParts.Count - 1));
-                         if (part != null && IsLogicalOptimized(part))
-                         {
-                             try { ResizeLogicalPartition(part, 0); } catch { }
-                         }
-                     }
-                 }
+                foreach (var cmdParts in commands)
+                {
+                    if (cmdParts[0] == "flash")
+                    {
+                        // Find partition name in arguments
+                        string? part = GetPartitionFromArgs(cmdParts.GetRange(1, cmdParts.Count - 1));
+                        if (part != null && IsLogicalOptimized(part))
+                        {
+                            try { ResizeLogicalPartition(part, 0); } catch { }
+                        }
+                    }
+                }
             }
 
             // AOSP Optimized Flash Super: Group logical partitions and flash them more efficiently
@@ -1643,7 +1646,7 @@ namespace SharpFastboot
         private string? GetPartitionFromArgs(List<string> args)
         {
             // Simple heuristic to find partition name in flash arguments
-            foreach(var arg in args)
+            foreach (var arg in args)
             {
                 if (!arg.StartsWith("--")) return arg;
             }
@@ -1674,7 +1677,7 @@ namespace SharpFastboot
                     // ResizeLogicalPartition 内部会自动确保设备处于 fastbootd (userspace) 状态。
                     if (IsLogicalOptimized(partition))
                     {
-                         try { ResizeLogicalPartition(partition, 0); } catch { }
+                        try { ResizeLogicalPartition(partition, 0); } catch { }
                     }
 
                     if (applyVbmeta || IsVbmetaPartition(partition))
@@ -1706,7 +1709,7 @@ namespace SharpFastboot
         public void FlashAll(string productOutDir, bool wipe = false, bool skipSecondary = false, bool force = false, bool optimizeSuper = true)
         {
             CancelSnapshotIfNeeded();
-            
+
             // 预加载动态分区元数据以优化 IsLogical 速度
             LoadLogicalPartitionsFromMetadata(Path.Combine(productOutDir, "super_empty.img"));
 
@@ -1736,7 +1739,8 @@ namespace SharpFastboot
                 else physicalImages.Add(f);
             }
 
-            physicalImages = physicalImages.OrderBy(f => {
+            physicalImages = physicalImages.OrderBy(f =>
+            {
                 string part = Path.GetFileNameWithoutExtension(f);
                 if (part.EndsWith("_other", StringComparison.OrdinalIgnoreCase)) part = part.Substring(0, part.Length - 6);
                 int index = Array.IndexOf(PartitionPriority, part.ToLower());

@@ -1,7 +1,6 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
-using System.Buffers.Binary;
 
 namespace SharpFastboot
 {
@@ -69,7 +68,7 @@ namespace SharpFastboot
             ushort packetSize = BinaryPrimitives.ReadUInt16BigEndian(response.AsSpan(2, 2));
 
             if (version < 1) throw new Exception($"Target reported invalid protocol version {version}");
-            
+
             int negotiatedSize = Math.Min(2048, (int)packetSize);
             _maxDataLength = negotiatedSize - HeaderSize;
         }

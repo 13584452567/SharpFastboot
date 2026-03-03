@@ -246,11 +246,11 @@ namespace SharpFastboot.Usb.libusbdotnet
             {
                 int lenToRead = Math.Min(lenRemaining, maxLenToRead);
                 int read_len;
-                
+
                 reader.Read(buffer, count, lenToRead, 5000, out read_len);
 
                 if (read_len <= 0) break;
-                
+
                 count += read_len;
                 lenRemaining -= read_len;
 
@@ -269,7 +269,7 @@ namespace SharpFastboot.Usb.libusbdotnet
         public override long Write(byte[] data, int length)
         {
             if (writer == null) return -1;
-            
+
             const int maxLenToSend = 1048576;
             int lenRemaining = length;
             int count = 0;
@@ -291,7 +291,7 @@ namespace SharpFastboot.Usb.libusbdotnet
 
                 count += transferred;
                 lenRemaining -= transferred;
-                
+
                 if (transferred < lenToSend) break;
             }
 

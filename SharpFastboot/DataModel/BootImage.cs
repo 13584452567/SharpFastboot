@@ -1,7 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Text;
-using System.IO;
-using SharpFastboot;
 
 namespace SharpFastboot.DataModel
 {

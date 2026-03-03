@@ -1,6 +1,3 @@
-using System;
-using System.IO;
-
 namespace SharpFastboot
 {
     public static class FileSystemUtil
@@ -13,13 +10,13 @@ namespace SharpFastboot
             if (size < 4096 * 10) throw new ArgumentException("Size too small for EXT4");
             using var fs = File.Create(path);
             fs.SetLength(size);
-            
+
             byte[] sb = new byte[1024];
-            
+
             uint blockSize = 4096;
             uint blockCount = (uint)(size / blockSize);
-            
-            BitConverter.GetBytes((uint)128).CopyTo(sb, 0); 
+
+            BitConverter.GetBytes((uint)128).CopyTo(sb, 0);
             BitConverter.GetBytes(blockCount).CopyTo(sb, 4);
             BitConverter.GetBytes((uint)2).CopyTo(sb, 24);
             BitConverter.GetBytes((ushort)0xEF53).CopyTo(sb, 56);
@@ -42,7 +39,7 @@ namespace SharpFastboot
 
             byte[] sb = new byte[1024];
             BitConverter.GetBytes(0xF2F52010).CopyTo(sb, 0);
-            
+
             fs.Seek(1024, SeekOrigin.Begin);
             fs.Write(sb, 0, sb.Length);
         }

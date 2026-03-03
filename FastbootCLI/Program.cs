@@ -308,10 +308,10 @@ namespace FastbootCLI
                     {
                         string kernel = args[0];
                         if (!File.Exists(kernel)) kernel = FindImageFile(kernel) ?? kernel;
-                        
+
                         string? ramdisk = args.Count > 1 ? args[1] : null;
                         if (ramdisk != null && !File.Exists(ramdisk)) ramdisk = FindImageFile(ramdisk) ?? ramdisk;
-                        
+
                         string? second = args.Count > 2 ? args[2] : null;
                         if (second != null && !File.Exists(second)) second = FindImageFile(second) ?? second;
 
@@ -406,7 +406,7 @@ namespace FastbootCLI
                     dev.Dispose();
                     continue;
                 }
-                
+
                 if (string.IsNullOrEmpty(dev.SerialNumber) || dev.SerialNumber == "unknown")
                 {
                     dev.Dispose();

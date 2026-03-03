@@ -12,7 +12,7 @@ namespace SharpFastboot.Usb.Windows
         /// Many modern Fastboot drivers use the Google one, 
         /// while others might use older or generic WinUSB GUIDs.
         /// </summary>
-        public static readonly GUID[] KnownInterfaceGUIDs = 
+        public static readonly GUID[] KnownInterfaceGUIDs =
         {
             // Standard Google Android USB Driver Interface GUID
             new GUID { Data1 = 0xf72fe0d4, Data2 = 0xcbcb, Data3 = 0x407d, Data4 = [0x88, 0x14, 0x9e, 0xd6, 0x73, 0xd0, 0xdd, 0x6b] },
@@ -103,7 +103,7 @@ namespace SharpFastboot.Usb.Windows
                                         continue;
                                     if (winUsbResult == 1)
                                         continue;
-                                    
+
                                     LegacyUsbDevice legacy = new LegacyUsbDevice { DevicePath = devicePath, VendorId = vid, ProductId = pid, UsbDeviceType = UsbDeviceType.WinLegacy };
                                     if (legacy.CreateHandle() == 0)
                                     {

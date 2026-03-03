@@ -1,6 +1,5 @@
 using LibLpSharp;
 using LibSparseSharp;
-using System.IO;
 
 namespace SharpFastboot
 {
@@ -14,7 +13,7 @@ namespace SharpFastboot
         {
             _fastboot = fastboot;
             _mainPartition = mainPartition;
-            
+
             ulong superSize = 0;
 
             if (!string.IsNullOrEmpty(emptyImagePath) && File.Exists(emptyImagePath))
@@ -47,7 +46,7 @@ namespace SharpFastboot
             }
 
             if (superSize == 0) superSize = 1024L * 1024 * 1024 * 4; // Default 4GB if not found
-            
+
             var builder = new SuperImageBuilder(superSize, 65536, 2);
             builder.AddGroup("default", superSize);
             return builder;
@@ -59,13 +58,13 @@ namespace SharpFastboot
             var partition = _builder.FindPartition(name);
             if (partition == null)
             {
-                 // Not in super_empty.img? Add it manually (unlikely for standard builds but possible)
-                 _builder.AddPartition(name, (ulong)info.Length, groupName, MetadataFormat.LP_PARTITION_ATTR_READONLY, imagePath);
+                // Not in super_empty.img? Add it manually (unlikely for standard builds but possible)
+                _builder.AddPartition(name, (ulong)info.Length, groupName, MetadataFormat.LP_PARTITION_ATTR_READONLY, imagePath);
             }
             else
             {
-                 // In super_empty.img? Just update its size and mapping
-                 _builder.UpdatePartitionImage(name, (ulong)info.Length, imagePath);
+                // In super_empty.img? Just update its size and mapping
+                _builder.UpdatePartitionImage(name, (ulong)info.Length, imagePath);
             }
         }
 

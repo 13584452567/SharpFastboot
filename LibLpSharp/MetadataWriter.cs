@@ -132,7 +132,7 @@ public static class MetadataWriter
         // 写入主几何块及其备份
         stream.Seek(MetadataFormat.LP_PARTITION_RESERVED_BYTES, SeekOrigin.Begin);
         stream.Write(geometryBlob, 0, geometryBlob.Length);
-        
+
         stream.Seek(MetadataFormat.LP_PARTITION_RESERVED_BYTES + MetadataFormat.LP_METADATA_GEOMETRY_SIZE, SeekOrigin.Begin);
         stream.Write(geometryBlob, 0, geometryBlob.Length);
 

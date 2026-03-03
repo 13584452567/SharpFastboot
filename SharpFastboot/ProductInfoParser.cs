@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using SharpFastboot.DataModel;
 
 namespace SharpFastboot
@@ -145,7 +142,7 @@ namespace SharpFastboot
         private string GetVariable(string key)
         {
             if (_varCache.ContainsKey(key)) return _varCache[key];
-            
+
             string queryKey = key == "board" ? "product" : key;
             var resp = _fastboot.RawCommand("getvar:" + queryKey);
             string val = resp.Result == FastbootState.Success ? resp.Response.Trim() : "";

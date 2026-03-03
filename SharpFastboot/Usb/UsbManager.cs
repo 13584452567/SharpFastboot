@@ -1,8 +1,8 @@
-using System.Runtime.InteropServices;
 using SharpFastboot.Usb.libusbdotnet;
 using SharpFastboot.Usb.Linux;
 using SharpFastboot.Usb.macOS;
 using SharpFastboot.Usb.Windows;
+using System.Runtime.InteropServices;
 
 namespace SharpFastboot.Usb
 {
