@@ -13,8 +13,7 @@
         public FastbootResponse ThrowIfError()
         {
             if (Result == FastbootState.Fail)
-                throw new Exception("Error: remote: " + Enum.GetName(Result) + "\n" +
-                    $"({Response})");
+                throw new Exception("Command failed");
             return this;
         }
     }

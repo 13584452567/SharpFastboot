@@ -15,12 +15,66 @@ namespace SharpFastboot.Usb.libusbdotnet
         public byte DeviceAddress { get; set; }
         public byte InterfaceId { get; set; } = 0;
 
+        private static string BuildDevicePath(LibUsbDotNet.LibUsb.UsbDevice device)
+            => $"Bus {device.BusNumber} Device {device.Address}: {device.VendorId:X4}:{device.ProductId:X4}";
+
+        private static bool HasFastbootInterface(LibUsbDotNet.LibUsb.UsbDevice device)
+        {
+            try
+            {
+                foreach (var config in device.Configs)
+                {
+                    foreach (var ifc in config.Interfaces)
+                    {
+                        bool isFastbootInterface = (int)ifc.Class == 0xff && (int)ifc.SubClass == 0x42 && (int)ifc.Protocol == 0x03;
+                        if (!isFastbootInterface) continue;
+
+                        bool hasIn = false;
+                        bool hasOut = false;
+                        foreach (var endpoint in ifc.Endpoints)
+                        {
+                            if ((endpoint.EndpointAddress & 0x80) != 0) hasIn = true;
+                            else hasOut = true;
+                        }
+
+                        if (hasIn && hasOut) return true;
+                    }
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return false;
+        }
+
         public override int CreateHandle()
         {
             context = new UsbContext();
-            var deviceList = context.List();
-            var device = deviceList.OfType<LibUsbDotNet.LibUsb.UsbDevice>()
-                                   .FirstOrDefault(d => d.BusNumber == BusNumber && d.Address == DeviceAddress);
+            var candidates = context.List().OfType<LibUsbDotNet.LibUsb.UsbDevice>().ToList();
+
+            LibUsbDotNet.LibUsb.UsbDevice? device = null;
+
+            if (BusNumber != 0 || DeviceAddress != 0)
+            {
+                device = candidates.FirstOrDefault(d => d.BusNumber == BusNumber && d.Address == DeviceAddress);
+            }
+
+            if (device == null && !string.IsNullOrWhiteSpace(DevicePath))
+            {
+                device = candidates.FirstOrDefault(d =>
+                    string.Equals(BuildDevicePath(d), DevicePath, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (device == null)
+            {
+                device = candidates.FirstOrDefault(d =>
+                    d.VendorId == Vid &&
+                    d.ProductId == Pid &&
+                    HasFastbootInterface(d));
+            }
+
             if (device == null)
             {
                 context.Dispose();
@@ -29,46 +83,116 @@ namespace SharpFastboot.Usb.libusbdotnet
             }
 
             usbDevice = device;
-            usbDevice.Open();
+            try
+            {
+                usbDevice.Open();
+            }
+            catch
+            {
+                Dispose();
+                return -1;
+            }
+
             try
             {
                 usbDevice.SetConfiguration(1);
             }
             catch { }
 
-            try
-            {
-                usbDevice.ClaimInterface(InterfaceId);
-            }
-            catch
-            {
-                try
-                {
-                    (usbDevice as LibUsbDotNet.LibUsb.UsbDevice)?.DetachKernelDriver(InterfaceId);
-                    usbDevice.ClaimInterface(InterfaceId);
-                }
-                catch { }
-            }
+            byte targetInterfaceId = InterfaceId;
+            byte inEndpoint = 0;
+            byte outEndpoint = 0;
 
             foreach (var config in usbDevice.Configs)
             {
                 foreach (var ifc in config.Interfaces)
                 {
-                    if (ifc.Number != InterfaceId) continue;
+                    bool isFastbootInterface = (int)ifc.Class == 0xff && (int)ifc.SubClass == 0x42 && (int)ifc.Protocol == 0x03;
+                    if (!isFastbootInterface) continue;
+
+                    byte candidateIn = 0;
+                    byte candidateOut = 0;
                     foreach (var endpoint in ifc.Endpoints)
                     {
                         if ((endpoint.EndpointAddress & 0x80) != 0)
                         {
-                            reader = usbDevice.OpenEndpointReader((ReadEndpointID)endpoint.EndpointAddress);
-                            reader?.ReadFlush();
+                            if (candidateIn == 0) candidateIn = endpoint.EndpointAddress;
                         }
                         else
                         {
-                            writer = usbDevice.OpenEndpointWriter((WriteEndpointID)endpoint.EndpointAddress);
+                            if (candidateOut == 0) candidateOut = endpoint.EndpointAddress;
                         }
+                    }
+
+                    if (candidateIn != 0 && candidateOut != 0)
+                    {
+                        targetInterfaceId = (byte)ifc.Number;
+                        inEndpoint = candidateIn;
+                        outEndpoint = candidateOut;
+                        break;
+                    }
+                }
+
+                if (inEndpoint != 0 && outEndpoint != 0) break;
+            }
+
+            if (inEndpoint == 0 || outEndpoint == 0)
+            {
+                Dispose();
+                return -1;
+            }
+
+            InterfaceId = targetInterfaceId;
+
+            try
+            {
+                usbDevice.ClaimInterface(targetInterfaceId);
+            }
+            catch
+            {
+                try
+                {
+                    (usbDevice as LibUsbDotNet.LibUsb.UsbDevice)?.DetachKernelDriver(targetInterfaceId);
+                    usbDevice.ClaimInterface(targetInterfaceId);
+                }
+                catch { }
+            }
+
+            reader = null;
+            writer = null;
+
+            if (inEndpoint != 0 && outEndpoint != 0)
+            {
+                reader = usbDevice.OpenEndpointReader((ReadEndpointID)inEndpoint);
+                writer = usbDevice.OpenEndpointWriter((WriteEndpointID)outEndpoint);
+            }
+
+            if (reader == null || writer == null)
+            {
+                byte[] candidateInEndpoints = [0x81, 0x82, 0x83];
+                byte[] candidateOutEndpoints = [0x01, 0x02, 0x03];
+
+                for (int endpointIndex = 0; endpointIndex < candidateInEndpoints.Length; endpointIndex++)
+                {
+                    var testReader = usbDevice.OpenEndpointReader((ReadEndpointID)candidateInEndpoints[endpointIndex]);
+                    var testWriter = usbDevice.OpenEndpointWriter((WriteEndpointID)candidateOutEndpoints[endpointIndex]);
+                    if (testReader != null && testWriter != null)
+                    {
+                        reader = testReader;
+                        writer = testWriter;
+                        break;
                     }
                 }
             }
+
+            reader?.ReadFlush();
+
+            if (reader == null || writer == null)
+            {
+                Dispose();
+                return -1;
+            }
+
             GetSerialNumber();
             return 0;
         }
@@ -92,8 +216,9 @@ namespace SharpFastboot.Usb.libusbdotnet
             if (usbDevice != null)
             {
                 SerialNumber = usbDevice.Info.SerialNumber;
+                return 0;
             }
-            return 0;
+            return -1;
         }
 
         public override void Reset()

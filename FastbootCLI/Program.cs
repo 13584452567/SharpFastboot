@@ -77,7 +77,7 @@ namespace FastbootCLI
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine("FAILED: " + ex.Message);
+                Console.Error.WriteLine("fastboot: error: " + ex.Message);
                 Environment.Exit(1);
             }
         }
@@ -118,8 +118,11 @@ namespace FastbootCLI
 
             util.CurrentStepChanged += (s, e) => Console.Error.WriteLine(e + "...");
 
+            bool showProgress = !string.Equals(command, "stage", StringComparison.OrdinalIgnoreCase);
+
             util.DataTransferProgressChanged += (s, e) =>
             {
+                if (!showProgress) return;
                 var (current, total) = e;
                 double percent = (double)current / total * 100;
                 Console.Error.Write($"\rProgress: {percent:F1}% ({current}/{total} bytes)    ");
@@ -134,19 +137,11 @@ namespace FastbootCLI
                     if (args.Count == 0) throw new Exception("getvar requires a variable name");
                     if (args[0] == "all")
                     {
-                        var vars = util.GetVarAll();
-                        foreach (var kv in vars) Console.WriteLine(kv.Key + ": " + kv.Value);
+                        util.GetVarAll();
                     }
                     else
                     {
-                        try
-                        {
-                            Console.WriteLine(args[0] + ": " + util.GetVar(args[0]));
-                        }
-                        catch
-                        {
-                            Console.WriteLine(args[0] + ": ");
-                        }
+                        util.GetVar(args[0]);
                     }
                     break;
                 case "reboot":
@@ -222,9 +217,8 @@ namespace FastbootCLI
                     if (args.Count == 0) throw new Exception("gsi: usage: gsi <wipe|disable|status>");
                     if (args[0] == "wipe") util.GsiWipe().ThrowIfError();
                     else if (args[0] == "disable") util.GsiDisable().ThrowIfError();
-                    else if (args[0] == "status") Console.WriteLine(util.GsiStatus().Response);
+                    else if (args[0] == "status") util.GsiStatus().ThrowIfError();
                     else throw new Exception("unknown gsi command: " + args[0]);
-                    Console.WriteLine("OKAY");
                     break;
                 case "update-super":
                     if (args.Count < 2) throw new Exception("update-super: usage: update-super <partition> <filename>");
@@ -342,11 +336,14 @@ namespace FastbootCLI
                     if (args.Count == 0) throw new Exception("stage: usage: stage <filename>");
                     string stageFile = args[0];
                     if (!File.Exists(stageFile)) stageFile = FindImageFile(stageFile) ?? stageFile;
+                    long stageSize = new FileInfo(stageFile).Length;
+                    Stopwatch stageSw = Stopwatch.StartNew();
                     using (var fs = File.OpenRead(stageFile))
                     {
-                        util.Stage(fs, fs.Length).ThrowIfError();
+                        util.DownloadData(fs, fs.Length).ThrowIfError();
                     }
-                    Console.WriteLine("OKAY");
+                    stageSw.Stop();
+                    Console.Error.WriteLine($"Sending '{stageFile}' ({stageSize / 1024} KB)                  OKAY [  {stageSw.Elapsed.TotalSeconds:F3}s]");
                     break;
                 case "update":
                     if (args.Count == 0) throw new Exception("update: usage: update <filename.zip>");

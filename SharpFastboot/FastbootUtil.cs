@@ -123,18 +123,40 @@ namespace SharpFastboot
             catch (Exception e)
             {
                 Console.Error.WriteLine("command write failed: " + e.Message); // Redirect to stderr
+                if (e.Message.Contains("函数不正确", StringComparison.OrdinalIgnoreCase) ||
+                    e.Message.Contains("incorrect function", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.Error.WriteLine("hint: current Windows driver likely does not match native backend. Try '--libusb' or switch device driver to WinUSB.");
+                }
                 return new FastbootResponse { Result = FastbootState.Fail, Response = "command write failed: " + e.Message };
             }
 
             var response = HandleResponse();
 
-            if (command.StartsWith("devices"))
+            if (response.Result == FastbootState.Fail)
             {
-                Console.WriteLine(response.Response); // Redirect 'devices' output to stdout
+                if (command.StartsWith("snapshot-update", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.Error.WriteLine($"Snapshot                                           FAILED (remote: '{response.Response}')");
+                }
+                else
+                {
+                    Console.Error.WriteLine($"FAILED (remote: '{response.Response}')");
+                }
             }
-            else
+            else if (command.StartsWith("getvar:", StringComparison.OrdinalIgnoreCase) &&
+                     !string.Equals(command, "getvar:all", StringComparison.OrdinalIgnoreCase))
             {
-                Console.Error.WriteLine(response.Response); // Redirect other outputs to stderr
+                string key = command.Substring("getvar:".Length);
+                Console.Error.WriteLine($"{key}: {response.Response}");
+            }
+            else if (command.StartsWith("devices"))
+            {
+                Console.WriteLine(response.Response);
+            }
+            else if (!string.IsNullOrEmpty(response.Response))
+            {
+                Console.Error.WriteLine(response.Response);
             }
 
             return response;

@@ -74,6 +74,12 @@ namespace SharpFastboot.Usb.Windows
                     }
                 }
             }
+
+            if (ReadBulkID == 0 || WriteBulkID == 0)
+            {
+                return -1;
+            }
+
             GetSerialNumber();
 
             byte bTrue = 1;

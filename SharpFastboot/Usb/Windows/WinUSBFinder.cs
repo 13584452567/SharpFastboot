@@ -101,6 +101,8 @@ namespace SharpFastboot.Usb.Windows
                                     winUsb.Dispose();
                                     if (winUsbResult == -1)
                                         continue;
+                                    if (winUsbResult == 1)
+                                        continue;
                                     
                                     LegacyUsbDevice legacy = new LegacyUsbDevice { DevicePath = devicePath, VendorId = vid, ProductId = pid, UsbDeviceType = UsbDeviceType.WinLegacy };
                                     if (legacy.CreateHandle() == 0)
